@@ -1,641 +1,847 @@
-(function () {
-  const $ = (s, el = document) => el.querySelector(s);
-  const $$ = (s, el = document) => [...el.querySelectorAll(s)];
-  const rand = (a, b) => a + Math.random() * (b - a);
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { buildModel, buildTool, woodTexture } from './models.js';
 
-  const tray = $('#tray'), canvas = $('#sand'), layer = $('#objects'), bar = $('#objbar');
-  const sand = new Sand(canvas);
-  const ITEM = Object.fromEntries(ITEMS.map(i => [i.id, i]));
-  const KEY = 'zen-garden-v1';
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerpAngle = (a, b, t) => { let d = ((b - a + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI; return a + d * t; };
 
-  const TOOLS = {
-    rake:   { kind: 'rake', n: 5, sp: 15, w: 7 },
-    wide:   { kind: 'rake', n: 9, sp: 13, w: 6 },
-    stick:  { kind: 'rake', n: 1, sp: 0, w: 10 },
-    ripple: { kind: 'ripple', n: 5, sp: 17, w: 7 },
-    smooth: { kind: 'smooth', r: 48 },
-  };
-  const SAND_COLORS = [
-    ['Classic', '#e8dcc4'], ['White', '#f2eee6'], ['Pearl', '#d4d0c7'],
-    ['Rose', '#ecd3c7'], ['Sea glass', '#cfe0d5'], ['Charcoal', '#5a5753'],
-  ];
-  const FRAMES = {
-    birch:  ['Birch', '#ecd3a4', '#cfa970'],
-    walnut: ['Walnut', '#86603f', '#563823'],
-    ebony:  ['Ebony', '#3a3430', '#1c1917'],
-    bamboo: ['Bamboo', '#d8c57c', '#a99245'],
-    stone:  ['Stone', '#e6e3dd', '#bdb8af'],
-  };
+const ITEMS = window.ITEMS, Sound = window.Sound;
+const ITEM = Object.fromEntries(ITEMS.map(i => [i.id, i]));
+const KEY = 'zen-garden-v1';
+const SIZE = 10;          // sand is 10 x 10 world units
+const RIM = 0.75, RIM_H = 0.34, DEPTH = 0.75;
 
-  const state = { tool: 'rake', objects: [], selected: null, roam: true, sandColor: SAND_COLORS[0][1], frame: 'birch' };
-  let uid = 1;
+const TOOLS = {
+  rake:   { kind: 'rake', n: 5, sp: 15, w: 7 },
+  wide:   { kind: 'rake', n: 9, sp: 13, w: 6 },
+  stick:  { kind: 'rake', n: 1, sp: 0, w: 10 },
+  ripple: { kind: 'ripple', n: 5, sp: 17, w: 7 },
+  smooth: { kind: 'smooth', r: 48 },
+};
+const SAND_COLORS = [
+  ['Classic', '#e8dcc4'], ['White', '#f2eee6'], ['Pearl', '#d4d0c7'],
+  ['Rose', '#ecd3c7'], ['Sea glass', '#cfe0d5'], ['Charcoal', '#5a5753'],
+];
+const FRAMES = {
+  birch:  ['Birch', '#e8cc98'],
+  walnut: ['Walnut', '#7a5434'],
+  ebony:  ['Ebony', '#2e2926'],
+  bamboo: ['Bamboo', '#cdb86a'],
+  stone:  ['Stone', '#d9d5ce'],
+};
 
-  // Each copy of an SVG gets its own gradient/clip ids so copies never clash.
-  const uniq = (svg, sfx) => svg.replace(/(id="|url\(#)([\w-]+)/g, (m, p, n) => p + n + '_' + sfx);
+const state = { tool: 'rake', objects: [], selected: null, roam: true, sandColor: SAND_COLORS[0][1], frame: 'birch', view: '3d' };
+let uid = 1;
 
-  /* ---------------- palette ---------------- */
-  const CATS = [['rocks', 'Stones'], ['plants', 'Plants'], ['decor', 'Decor'], ['animals', 'Animals']];
-  const pal = $('#palette');
-  for (const [cat, label] of CATS) {
-    const sec = document.createElement('section');
-    sec.className = 'pal-sec';
-    sec.innerHTML = `<h3>${label}</h3><div class="pal-grid"></div>`;
-    const grid = $('.pal-grid', sec);
-    ITEMS.filter(i => i.cat === cat).forEach(item => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'pal-item' + (item.animal ? ' is-animal' : '');
-      b.title = `Drag ${item.name.toLowerCase()} into your garden (or tap to add)`;
-      b.innerHTML = `<span class="pal-art">${uniq(item.svg, 'p' + item.id)}</span><span class="pal-name">${item.name}</span>`;
-      b.addEventListener('pointerdown', e => startPaletteDrag(e, item));
-      b.addEventListener('keydown', e => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); Sound.init(); addObject(item.id, ...freeSpot(), { select: true }); }
-      });
-      grid.appendChild(b);
+/* =============== renderer, scene, camera =============== */
+const stage = $('#stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.82;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+const view = renderer.domElement;
+view.id = 'view';
+stage.prepend(view);
+
+const scene = new THREE.Scene();
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 200);
+camera.position.set(0, 14, 13);
+const controls = new OrbitControls(camera, view);
+controls.enablePan = false;
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+controls.touches = { ONE: null, TWO: THREE.TOUCH.DOLLY_ROTATE };
+controls.minPolarAngle = 0.02;
+controls.maxPolarAngle = 1.2;
+controls.minDistance = 6;
+controls.maxDistance = 50;
+
+scene.add(new THREE.HemisphereLight(0xfff6e8, 0xb9a27c, 0.35));
+const sun = new THREE.DirectionalLight(0xfff0d8, 2.6);
+sun.position.set(-9, 8, -6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -9, right: 9, top: 9, bottom: -9, near: 1, far: 40 });
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.02;
+sun.shadow.radius = 3;
+scene.add(sun);
+
+/* tray */
+const woodTex = woodTexture();
+const woodTexZ = woodTex.clone();
+woodTexZ.center.set(0.5, 0.5); woodTexZ.rotation = Math.PI / 2; woodTexZ.needsUpdate = true;
+const woodX = new THREE.MeshStandardMaterial({ map: woodTex, roughness: 0.5 });
+const woodZ = new THREE.MeshStandardMaterial({ map: woodTexZ, roughness: 0.5 });
+const frameH = RIM_H + DEPTH, frameY = (RIM_H - DEPTH) / 2;
+const addPiece = (w, d, x, z, mat) => {
+  const m = new THREE.Mesh(new RoundedBoxGeometry(w, frameH, d, 4, 0.08), mat);
+  m.position.set(x, frameY, z);
+  m.castShadow = m.receiveShadow = true;
+  scene.add(m);
+};
+addPiece(SIZE + RIM * 2, RIM, 0, -(SIZE + RIM) / 2, woodX);
+addPiece(SIZE + RIM * 2, RIM, 0, (SIZE + RIM) / 2, woodX);
+addPiece(RIM, SIZE + 0.02, -(SIZE + RIM) / 2, 0, woodZ);
+addPiece(RIM, SIZE + 0.02, (SIZE + RIM) / 2, 0, woodZ);
+const floor = new THREE.Mesh(new THREE.BoxGeometry(SIZE + 0.1, 0.1, SIZE + 0.1), woodX);
+floor.position.y = -DEPTH + 0.05;
+scene.add(floor);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.ShadowMaterial({ opacity: 0.18 }));
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -DEPTH - 0.001;
+ground.receiveShadow = true;
+scene.add(ground);
+
+/* sand */
+const sand = new Sand();
+const colorTex = new THREE.CanvasTexture(sand.canvas);
+colorTex.colorSpace = THREE.SRGBColorSpace;
+colorTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+const heightTex = new THREE.CanvasTexture(sand.hc);
+const sandGeo = new THREE.PlaneGeometry(SIZE, SIZE, 360, 360);
+sandGeo.rotateX(-Math.PI / 2);
+const sandMat = new THREE.MeshStandardMaterial({
+  map: colorTex, bumpMap: heightTex, bumpScale: 5,
+  displacementMap: heightTex, displacementScale: 0.12, displacementBias: -0.06, roughness: 0.96,
+});
+const sandMesh = new THREE.Mesh(sandGeo, sandMat);
+sandMesh.receiveShadow = true;
+scene.add(sandMesh);
+
+/* selection ring */
+const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false });
+const selRing = new THREE.Mesh(new THREE.RingGeometry(0.56, 0.62, 64), ringMat);
+selRing.rotation.x = -Math.PI / 2;
+selRing.visible = false;
+scene.add(selRing);
+
+/* hand tools */
+const toolMeshes = {
+  rake: buildTool('rake', 5, 0.15),
+  wide: buildTool('rake', 9, 0.13),
+  stick: buildTool('stick'),
+  ripple: buildTool('stick'),
+  smooth: buildTool('smooth'),
+};
+Object.values(toolMeshes).forEach(t => { t.visible = false; scene.add(t); });
+const tool = { pos: new THREE.Vector3(), target: new THREE.Vector3(), angle: 0, targetAngle: 0, y: 0.4, show: false, active: false, snap: true };
+
+/* =============== layout & camera fit =============== */
+const VIEWS = { '3d': 0.82, top: 0.02 };
+function fitDistance() {
+  const aspect = view.clientWidth / Math.max(1, view.clientHeight);
+  const half = SIZE / 2 + RIM + 0.4;
+  const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const polar = controls.getPolarAngle();
+  const dv = (half * (0.55 + 0.45 * Math.cos(polar))) / t + half * Math.sin(polar) * 0.6;
+  const dh = half / (t * aspect) + half * Math.sin(polar) * 0.3;
+  return Math.max(dv * 0.9, dh * 1.1);
+}
+function setDistance(d) {
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  camera.position.copy(controls.target).addScaledVector(dir, d);
+}
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  if (!w || !h) return;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  setDistance(fitDistance());
+}
+new ResizeObserver(resize).observe(stage);
+
+let viewAnim = null;
+function setView(name) {
+  state.view = name;
+  $$('[data-view]').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === name));
+  const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
+  viewAnim = { t: 0, from: { phi: sph.phi, theta: sph.theta, r: sph.radius }, to: { phi: VIEWS[name], theta: 0 } };
+}
+function stepView(dt) {
+  if (!viewAnim) return;
+  viewAnim.t = Math.min(1, viewAnim.t + dt / 0.7);
+  const e = 1 - Math.pow(1 - viewAnim.t, 3), f = viewAnim.from, to = viewAnim.to;
+  const phi = f.phi + (to.phi - f.phi) * e, theta = lerpAngle(f.theta, to.theta, e);
+  camera.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(new THREE.Spherical(f.r, phi, theta)));
+  if (viewAnim.t >= 1) { viewAnim = null; setDistance(fitDistance()); }
+}
+
+/* =============== palette =============== */
+const uniq = (svg, sfx) => svg.replace(/(id="|url\(#)([\w-]+)/g, (m, p, n) => p + n + '_' + sfx);
+const CATS = [['rocks', 'Stones'], ['plants', 'Plants'], ['decor', 'Decor'], ['animals', 'Animals']];
+const pal = $('#palette');
+for (const [cat, label] of CATS) {
+  const sec = document.createElement('section');
+  sec.className = 'pal-sec';
+  sec.innerHTML = `<h3>${label}</h3><div class="pal-grid"></div>`;
+  const grid = $('.pal-grid', sec);
+  ITEMS.filter(i => i.cat === cat).forEach(item => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'pal-item';
+    b.title = `Drag ${item.name.toLowerCase()} into your garden (or tap to add)`;
+    b.innerHTML = `<span class="pal-art">${uniq(item.svg, 'p' + item.id)}</span><span class="pal-name">${item.name}</span>`;
+    b.addEventListener('pointerdown', e => startPaletteDrag(e, item));
+    b.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); addObject(item.id, ...freeSpot(), { select: true }); }
     });
-    pal.appendChild(sec);
-  }
+    grid.appendChild(b);
+  });
+  pal.appendChild(sec);
+}
 
-  const toNorm = ev => {
-    const r = canvas.getBoundingClientRect();
-    return { x: (ev.clientX - r.left) / r.width, y: (ev.clientY - r.top) / r.height };
+/* =============== picking =============== */
+const raycaster = new THREE.Raycaster(), ndc = new THREE.Vector2();
+const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+function setRay(ev) {
+  const r = view.getBoundingClientRect();
+  ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+}
+function groundAt(ev) {
+  setRay(ev);
+  const p = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(plane, p)) return null;
+  return { x: p.x / SIZE + 0.5, y: p.z / SIZE + 0.5, p };
+}
+function objectAt(ev) {
+  setRay(ev);
+  const hits = raycaster.intersectObjects(state.objects.map(o => o.root), true);
+  for (const h of hits) {
+    let n = h.object;
+    while (n && !n.userData.obj) n = n.parent;
+    if (n) return n.userData.obj;
+  }
+  return null;
+}
+const inSand = g => g && g.x >= 0 && g.x <= 1 && g.y >= 0 && g.y <= 1;
+
+function freeSpot() {
+  let best = [0.5, 0.5], bestD = -1;
+  for (let i = 0; i < 40; i++) {
+    const x = rand(0.15, 0.85), y = rand(0.15, 0.85);
+    let d = 9;
+    for (const o of state.objects) d = Math.min(d, Math.hypot(o.x - x, o.y - y));
+    if (d > bestD) { bestD = d; best = [x, y]; }
+  }
+  return best;
+}
+
+/* =============== objects =============== */
+function addObject(id, x, y, opts = {}) {
+  const item = ITEM[id];
+  if (!item) return null;
+  const model = buildModel(id);
+  // normalise: footprint about 1 unit wide, centred, tall things capped
+  const box = new THREE.Box3().setFromObject(model), ext = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+  const k = 1 / Math.max(ext.x, ext.z, ext.y * 0.7, 0.01);
+  model.scale.multiplyScalar(k);
+  model.position.x -= c.x * k; model.position.z -= c.z * k;
+  const root = new THREE.Group(), lift = new THREE.Group();
+  root.add(lift); lift.add(model);
+  const o = {
+    uid: uid++, id, item, x, y, rot: opts.rot || 0, scale: opts.scale || 1, flip: !!opts.flip,
+    root, lift, model, h: box.max.y * k, a: null, dropT: opts.silent ? 0 : 1, pokeT: 0, hopY: 0, flyY: 0,
   };
-  const toCanvas = ev => { const p = toNorm(ev); return { x: p.x * 1000, y: p.y * 1000 }; };
-  const overSand = ev => { const p = toNorm(ev); return p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1; };
+  root.userData.obj = o;
+  scene.add(root);
+  state.objects.push(o);
+  place(o);
+  if (!opts.silent) { Sound.place(item); hideHint(); }
+  if (opts.select) select(o);
+  save();
+  return o;
+}
+const worldSize = o => o.item.size * SIZE * o.scale;
+function place(o) {
+  const s = worldSize(o);
+  o.root.position.set((o.x - 0.5) * SIZE, 0, (o.y - 0.5) * SIZE);
+  o.root.scale.set(s, s, o.flip && !o.item.animal ? -s : s);
+  o.root.rotation.y = -o.rot * Math.PI / 180 + (o.flip && o.item.animal ? Math.PI : 0);
+}
+function select(o) {
+  state.selected = o;
+  $('#objbar').hidden = !o;
+  selRing.visible = !!o;
+}
+function removeObject(o) {
+  Sound.remove();
+  if (state.selected === o) select(null);
+  const i = state.objects.indexOf(o);
+  if (i >= 0) state.objects.splice(i, 1);
+  o.removing = 1;
+  o.dying = 0.25;
+  save();
+}
+function poke(o) {
+  Sound.voice(o.item.voice);
+  o.pokeT = 0.6;
+  if (o.item.move === 'hop' && o.a && !o.a.hopping) o.a.timer = 0.4;
+  if (o.item.move === 'fly' && o.a) { o.a.pause = 0; o.a.target = null; }
+}
 
-  function freeSpot() {
-    let best = [0.5, 0.5], bestD = -1;
-    for (let i = 0; i < 40; i++) {
-      const x = rand(0.15, 0.85), y = rand(0.15, 0.85);
-      let d = 9;
-      for (const o of state.objects) d = Math.min(d, Math.hypot(o.x - x, o.y - y));
-      if (d > bestD) { bestD = d; best = [x, y]; }
+/* =============== palette drag =============== */
+function startPaletteDrag(e, item) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  Sound.init();
+  const sx = e.clientX, sy = e.clientY;
+  let ghost = null;
+  const move = ev => {
+    if (!ghost) {
+      if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 8) return;
+      ghost = document.createElement('div');
+      ghost.className = 'ghost';
+      ghost.innerHTML = uniq(item.svg, 'ghost');
+      document.body.appendChild(ghost);
+      Sound.pick();
     }
-    return best;
-  }
+    ghost.style.left = ev.clientX + 'px';
+    ghost.style.top = ev.clientY + 'px';
+    const g = overView(ev) ? groundAt(ev) : null;
+    const ok = inSand(g);
+    ghost.classList.toggle('over', ok);
+    if (ok) { tool.show = false; dropMarker(g); } else dropMarker(null);
+  };
+  const done = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', done);
+    if (ghost) ghost.remove();
+    dropMarker(null);
+  };
+  const up = ev => {
+    const had = !!ghost;
+    done();
+    if (!had) { addObject(item.id, ...freeSpot(), { select: true }); return; }
+    const g = overView(ev) ? groundAt(ev) : null;
+    if (inSand(g)) addObject(item.id, clamp(g.x, 0.03, 0.97), clamp(g.y, 0.03, 0.97), { select: true });
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', done);
+}
+const overView = ev => { const r = view.getBoundingClientRect(); return ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom; };
+const marker = new THREE.Mesh(new THREE.RingGeometry(0.35, 0.42, 48), new THREE.MeshBasicMaterial({ color: 0x6b8a5a, transparent: true, opacity: 0.8, depthWrite: false }));
+marker.rotation.x = -Math.PI / 2; marker.position.y = 0.03; marker.visible = false; scene.add(marker);
+function dropMarker(g) { marker.visible = !!g; if (g) marker.position.set(g.p.x, 0.03, g.p.z); }
 
-  function startPaletteDrag(e, item) {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    Sound.init();
-    const sx = e.clientX, sy = e.clientY;
-    let ghost = null;
-    const move = ev => {
-      if (!ghost) {
-        if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 8) return;
-        ghost = document.createElement('div');
-        ghost.className = 'ghost';
-        const w = item.size * canvas.getBoundingClientRect().width;
-        ghost.style.width = ghost.style.height = w + 'px';
-        ghost.innerHTML = uniq(item.svg, 'ghost');
-        document.body.appendChild(ghost);
-        Sound.pick();
-      }
-      ghost.style.left = ev.clientX + 'px';
-      ghost.style.top = ev.clientY + 'px';
-      tray.classList.toggle('drop-hover', overSand(ev));
-    };
-    const done = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', cancel);
-      tray.classList.remove('drop-hover');
-      if (ghost) ghost.remove();
-    };
-    const up = ev => {
-      const hadGhost = !!ghost;
-      done();
-      if (!hadGhost) { addObject(item.id, ...freeSpot(), { select: true }); return; }
-      if (overSand(ev)) {
-        const p = toNorm(ev);
-        addObject(item.id, clamp(p.x, 0.03, 0.97), clamp(p.y, 0.03, 0.97), { select: true });
-      }
-    };
-    const cancel = () => done();
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', cancel);
-  }
+/* =============== pointer: rake, ripple, drag objects =============== */
+const pointers = new Set();
+let stroke = null, drag = null, hoverObj = null;
 
-  /* ---------------- objects in the garden ---------------- */
-  function addObject(id, x, y, opts = {}) {
-    const item = ITEM[id];
-    if (!item) return null;
-    const o = { uid: uid++, id, item, x, y, rot: opts.rot || 0, scale: opts.scale || 1, flip: !!opts.flip, a: null };
-    const el = document.createElement('div');
-    el.className = `obj c-${item.cat}` + (item.animal ? ` animal a-${id}` : '');
-    el.innerHTML = `<div class="obj-inner"><div class="obj-hop"><div class="obj-body">${uniq(item.svg, o.uid)}</div></div></div>`;
-    el.style.setProperty('--d', (-Math.random() * 6).toFixed(2) + 's');
-    o.el = el; o.inner = $('.obj-inner', el); o.hop = $('.obj-hop', el); o.body = $('.obj-body', el);
-    el.addEventListener('pointerdown', e => objPointerDown(e, o));
-    el.addEventListener('wheel', e => {
-      if (state.selected !== o) return;
-      e.preventDefault();
-      o.scale = clamp(o.scale * (e.deltaY < 0 ? 1.06 : 0.94), 0.4, 2.5);
-      render(o); save();
-    }, { passive: false });
-    layer.appendChild(el);
-    state.objects.push(o);
-    render(o);
-    if (!opts.silent) {
-      Sound.place(item);
-      el.classList.add('drop-in');
-      setTimeout(() => el.classList.remove('drop-in'), 450);
-      hideHint();
-    }
-    if (opts.select) select(o);
-    save();
-    return o;
-  }
+function ripples(x, y, r0) {
+  const t = TOOLS.ripple;
+  tool.active = true;
+  sand.ring(x, y, r0, { n: t.n, sp: t.sp, w: t.w }, true,
+    (px, py) => { tool.target.set((px / 1000 - 0.5) * SIZE, 0, (py / 1000 - 0.5) * SIZE); tool.targetAngle = Math.atan2(py - y, px - x) + Math.PI / 2; },
+    () => { tool.active = false; });
+  tool.show = true;
+  Sound.ripple();
+  hideHint();
+  save();
+}
 
-  function render(o) {
-    const s = o.el.style;
-    s.left = o.x * 100 + '%';
-    s.top = o.y * 100 + '%';
-    s.width = o.item.size * o.scale * 100 + '%';
-    s.zIndex = o.item.fly ? 900 : o.item.flat ? 5 + Math.round(o.y * 4) : 10 + Math.round(o.y * 800);
-    o.inner.style.transform = `rotate(${o.rot}deg) scaleX(${o.flip ? -1 : 1})`;
-    if (o === state.selected && !o.dragging) placeBar();
-  }
-
-  function select(o) {
-    if (state.selected) state.selected.el.classList.remove('selected');
-    state.selected = o;
-    if (o) { o.el.classList.add('selected'); bar.hidden = false; placeBar(); }
-    else bar.hidden = true;
-  }
-  function placeBar() {
-    const o = state.selected;
-    if (!o) return;
-    const h = o.item.size * o.scale;
-    let y = o.y + h * 0.5, above = false;
-    if (y > 0.86) { y = o.y - h * 0.5; above = true; }
-    bar.style.left = clamp(o.x, 0.16, 0.84) * 100 + '%';
-    bar.style.top = y * 100 + '%';
-    bar.classList.toggle('above', above);
-  }
-
-  function objPointerDown(e, o) {
-    if (e.button !== 0) return;
-    e.stopPropagation();
-    e.preventDefault();
-    Sound.init();
-    if (state.tool === 'ripple') {
-      ripples(o.x * 1000, o.y * 1000, o.item.size * o.scale * 1000 * 0.42 + 10);
-      return;
-    }
+view.addEventListener('pointerdown', e => {
+  pointers.add(e.pointerId);
+  if (pointers.size > 1) { cancelInteractions(); return; }
+  if (e.button !== 0) return;
+  Sound.init();
+  viewAnim = null;
+  const o = objectAt(e);
+  if (o) {
+    if (state.tool === 'ripple') { ripples(o.x * 1000, o.y * 1000, worldSize(o) * 100 * 0.45 + 12); return; }
     select(o);
-    const start = toNorm(e), ox = o.x - start.x, oy = o.y - start.y;
-    let moved = false, outside = false;
-    const move = ev => {
-      const p = toNorm(ev);
-      if (!moved) {
-        if (Math.hypot(p.x - start.x, p.y - start.y) * canvas.clientWidth < 5) return;
-        moved = true; o.dragging = true;
-        o.el.classList.add('dragging');
-        if (o.a) { o.a.hopping = null; o.hop.style.transform = ''; }
-        bar.hidden = true;
-        Sound.pick();
-      }
-      o.x = p.x + ox; o.y = p.y + oy;
-      outside = p.x < -0.03 || p.x > 1.03 || p.y < -0.03 || p.y > 1.03;
-      o.el.classList.toggle('removing', outside);
-      tray.classList.toggle('drop-remove', outside);
-      render(o);
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', up);
-      o.dragging = false;
-      o.el.classList.remove('dragging');
-      tray.classList.remove('drop-remove');
-      if (outside) { removeObject(o); return; }
-      if (moved) {
-        o.x = clamp(o.x, 0.03, 0.97); o.y = clamp(o.y, 0.03, 0.97);
-        if (o.a) { o.a.target = null; o.a.trail = null; }
-        render(o);
-        Sound.place(o.item, 0.5);
-        if (state.selected === o) { bar.hidden = false; placeBar(); }
-        save();
-      } else if (o.item.animal) poke(o);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
+    const g = groundAt(e);
+    drag = { o, sx: e.clientX, sy: e.clientY, ox: o.x - (g ? g.x : o.x), oy: o.y - (g ? g.y : o.y), moved: false, outside: false };
+    view.setPointerCapture(e.pointerId);
+    return;
   }
+  const g = groundAt(e);
+  select(null);
+  if (!inSand(g)) return;
+  const t = TOOLS[state.tool];
+  if (t.kind === 'ripple') { ripples(g.x * 1000, g.y * 1000, 16); return; }
+  view.setPointerCapture(e.pointerId);
+  stroke = { last: performance.now(), lx: g.x * 1000, ly: g.y * 1000 };
+  if (t.kind === 'smooth') sand.begin({ t: 'smooth', r: t.r }, g.x * 1000, g.y * 1000);
+  else sand.begin({ t: 'rake', n: t.n, sp: t.sp, w: t.w }, g.x * 1000, g.y * 1000);
+  tool.active = true; tool.show = true;
+  tool.target.copy(g.p);
+  if (e.pointerType !== 'mouse') tool.snap = true;
+  hideHint();
+});
 
-  function removeObject(o) {
-    Sound.remove();
-    if (state.selected === o) select(null);
-    const i = state.objects.indexOf(o);
-    if (i >= 0) state.objects.splice(i, 1);
-    o.el.classList.add('poof');
-    setTimeout(() => o.el.remove(), 280);
-    save();
-  }
-
-  function poke(o) {
-    Sound.voice(o.item.voice);
-    o.body.classList.remove('poke');
-    void o.body.offsetWidth;
-    o.body.classList.add('poke');
-    setTimeout(() => o.body.classList.remove('poke'), 700);
-    if (o.item.move === 'hop' && o.a && !o.a.hopping) o.a.timer = 0.35;
-    if (o.item.move === 'fly' && o.a) { o.a.pause = 0; o.a.target = null; }
-  }
-
-  /* selection toolbar */
-  bar.addEventListener('pointerdown', e => e.stopPropagation());
-  bar.addEventListener('click', e => {
-    const btn = e.target.closest('button[data-act]');
-    const o = state.selected;
-    if (!btn || !o) return;
-    Sound.init();
-    switch (btn.dataset.act) {
-      case 'rotl': o.rot -= 15; break;
-      case 'rotr': o.rot += 15; break;
-      case 'smaller': o.scale = clamp(o.scale / 1.15, 0.4, 2.5); break;
-      case 'bigger': o.scale = clamp(o.scale * 1.15, 0.4, 2.5); break;
-      case 'flip': o.flip = !o.flip; break;
-      case 'delete': removeObject(o); return;
-    }
-    Sound.tick();
-    render(o); save();
-  });
-
-  /* ---------------- sand ---------------- */
-  let stroke = null;
-  function ripples(x, y, r0) {
-    const t = TOOLS.ripple;
-    sand.ring(x, y, r0, { n: t.n, sp: t.sp, w: t.w });
-    Sound.ripple();
-    hideHint();
-    save();
-  }
-  canvas.addEventListener('pointerdown', e => {
-    if (e.button !== 0) return;
-    Sound.init();
-    select(null);
-    const p = toCanvas(e), t = TOOLS[state.tool];
-    if (t.kind === 'ripple') { ripples(p.x, p.y, 16); return; }
-    canvas.setPointerCapture(e.pointerId);
-    stroke = { last: performance.now(), lx: p.x, ly: p.y };
-    if (t.kind === 'smooth') sand.begin({ t: 'smooth', r: t.r }, p.x, p.y);
-    else sand.begin({ t: 'rake', n: t.n, sp: t.sp, w: t.w }, p.x, p.y);
-    hideHint();
-  });
-  canvas.addEventListener('pointermove', e => {
-    if (!stroke) return;
+view.addEventListener('pointermove', e => {
+  if (drag) return dragMove(e);
+  if (stroke) {
     const evs = (e.getCoalescedEvents && e.getCoalescedEvents()) || [];
-    for (const ev of (evs.length ? evs : [e])) { const p = toCanvas(ev); sand.extend(p.x, p.y); }
-    const p = toCanvas(e), now = performance.now();
-    const d = Math.hypot(p.x - stroke.lx, p.y - stroke.ly), dt = Math.max(8, now - stroke.last);
-    stroke.lx = p.x; stroke.ly = p.y; stroke.last = now;
+    for (const ev of (evs.length ? evs : [e])) { const g = groundAt(ev); if (g) sand.extend(g.x * 1000, g.y * 1000); }
+    const g = groundAt(e);
+    if (!g) return;
+    const x = g.x * 1000, y = g.y * 1000, now = performance.now();
+    const d = Math.hypot(x - stroke.lx, y - stroke.ly), dt = Math.max(8, now - stroke.last);
+    if (d > 3) tool.targetAngle = Math.atan2(y - stroke.ly, x - stroke.lx);
+    stroke.lx = x; stroke.ly = y; stroke.last = now;
+    tool.target.copy(g.p);
     Sound.rake(d / dt, state.tool);
-  });
-  const endStroke = () => {
-    if (!stroke) return;
+    return;
+  }
+  if (pointers.size > 1 || e.pointerType !== 'mouse') return;
+  // hover: show the tool over sand, a grab hand over objects
+  hoverObj = objectAt(e);
+  const g = groundAt(e);
+  if (hoverObj && state.tool !== 'ripple') { tool.show = false; view.style.cursor = 'grab'; }
+  else if (inSand(g)) {
+    tool.show = true; view.style.cursor = 'none';
+    tool.target.copy(g.p);
+    if (!tool.active) tool.targetAngle = Math.atan2(camera.position.z - g.p.z, camera.position.x - g.p.x);
+  } else { tool.show = false; view.style.cursor = 'default'; }
+});
+
+function dragMove(e) {
+  const o = drag.o;
+  if (!drag.moved) {
+    if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 5) return;
+    drag.moved = true; o.dragging = true;
+    if (o.a) { o.a.hopping = null; o.a.trail = null; }
+    $('#objbar').hidden = true;
+    view.style.cursor = 'grabbing';
+    Sound.pick();
+  }
+  const g = groundAt(e);
+  if (!g) return;
+  o.x = g.x + drag.ox; o.y = g.y + drag.oy;
+  drag.outside = g.x < -0.04 || g.x > 1.04 || g.y < -0.04 || g.y > 1.04;
+  ringMat.color.set(drag.outside ? 0xd0573a : 0xffffff);
+  place(o);
+}
+
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (drag) {
+    const { o, moved, outside } = drag;
+    drag = null;
+    o.dragging = false;
+    ringMat.color.set(0xffffff);
+    view.style.cursor = 'grab';
+    if (outside) { removeObject(o); return; }
+    if (moved) {
+      o.x = clamp(o.x, 0.03, 0.97); o.y = clamp(o.y, 0.03, 0.97);
+      if (o.a) o.a.target = null;
+      place(o);
+      Sound.place(o.item, 0.5);
+      if (state.selected === o) $('#objbar').hidden = false;
+      save();
+    } else if (o.item.animal) poke(o);
+    return;
+  }
+  if (stroke) {
     stroke = null;
     sand.end();
     Sound.rakeStop();
+    tool.active = false;
+    if (e.pointerType !== 'mouse') tool.show = false;
     save();
+  }
+}
+view.addEventListener('pointerup', endPointer);
+view.addEventListener('pointercancel', endPointer);
+view.addEventListener('pointerleave', e => { if (!stroke && !drag && e.pointerType === 'mouse') tool.show = false; });
+function cancelInteractions() {
+  if (stroke) { stroke = null; sand.end(); Sound.rakeStop(); save(); }
+  if (drag) { drag.o.dragging = false; drag = null; }
+  tool.active = false; tool.show = false;
+}
+view.addEventListener('wheel', () => { viewAnim = null; }, { passive: true });
+
+/* selection toolbar */
+const bar = $('#objbar');
+bar.addEventListener('pointerdown', e => e.stopPropagation());
+bar.addEventListener('click', e => {
+  const btn = e.target.closest('button[data-act]');
+  const o = state.selected;
+  if (!btn || !o) return;
+  switch (btn.dataset.act) {
+    case 'rotl': o.rot -= 15; break;
+    case 'rotr': o.rot += 15; break;
+    case 'smaller': o.scale = clamp(o.scale / 1.15, 0.4, 2.5); break;
+    case 'bigger': o.scale = clamp(o.scale * 1.15, 0.4, 2.5); break;
+    case 'flip': o.flip = !o.flip; break;
+    case 'delete': removeObject(o); return;
+  }
+  Sound.tick();
+  place(o); save();
+});
+
+/* =============== controls =============== */
+function setTool(name) {
+  state.tool = name;
+  $$('.tool').forEach(b => b.setAttribute('aria-pressed', b.dataset.tool === name));
+  Object.entries(toolMeshes).forEach(([k, m]) => { if (k !== name) m.visible = false; });
+}
+$$('.tool').forEach(b => b.addEventListener('click', () => { Sound.tick(); setTool(b.dataset.tool); }));
+$$('[data-view]').forEach(b => b.addEventListener('click', () => { Sound.tick(); setView(b.dataset.view); }));
+
+const sandSw = $('#sandSwatches');
+SAND_COLORS.forEach(([name, hex]) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'swatch'; b.title = name + ' sand';
+  b.setAttribute('aria-label', name + ' sand');
+  b.style.background = hex; b.dataset.hex = hex;
+  b.addEventListener('click', () => { Sound.tick(); setSand(hex); save(); });
+  sandSw.appendChild(b);
+});
+function setSand(hex) {
+  state.sandColor = hex;
+  sand.setColor(hex);
+  $$('.swatch', sandSw).forEach(b => b.setAttribute('aria-pressed', b.dataset.hex === hex));
+}
+const frameSw = $('#frameSwatches');
+Object.entries(FRAMES).forEach(([key, [name, c]]) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'swatch'; b.title = name + ' frame';
+  b.setAttribute('aria-label', name + ' frame');
+  b.style.background = c; b.dataset.key = key;
+  b.addEventListener('click', () => { Sound.tick(); setFrame(key); save(); });
+  frameSw.appendChild(b);
+});
+function setFrame(key) {
+  if (!FRAMES[key]) key = 'birch';
+  state.frame = key;
+  woodX.color.set(FRAMES[key][1]); woodZ.color.set(FRAMES[key][1]);
+  $$('.swatch', frameSw).forEach(b => b.setAttribute('aria-pressed', b.dataset.key === key));
+}
+
+$('#undo').addEventListener('click', () => { if (sand.undo()) { Sound.undo(); save(); } });
+$('#clear').addEventListener('click', () => { Sound.clear(); sand.clear(); save(); });
+$('#reset').addEventListener('click', () => {
+  if (!confirm('Start a new, empty garden? Your current one will be cleared.')) return;
+  Sound.clear();
+  select(null);
+  state.objects.forEach(o => scene.remove(o.root));
+  state.objects = [];
+  sand.reset();
+  save();
+});
+$('#roam').addEventListener('change', e => {
+  state.roam = e.target.checked;
+  if (!state.roam) state.objects.forEach(o => { if (o.a) { o.a.hopping = null; o.a.walking = false; } o.hopY = 0; });
+  save();
+});
+
+const muteBtn = $('#mute');
+muteBtn.addEventListener('click', () => {
+  Sound.setMuted(!Sound.muted);
+  muteBtn.setAttribute('aria-pressed', Sound.muted);
+  muteBtn.title = Sound.muted ? 'Unmute' : 'Mute';
+  save();
+});
+$$('[data-amb]').forEach(b => b.addEventListener('click', () => {
+  const on = b.getAttribute('aria-pressed') !== 'true';
+  Sound.setAmbient(b.dataset.amb, on);
+  b.setAttribute('aria-pressed', on);
+  save();
+}));
+const soundNote = $('#soundNote');
+const updateSoundNote = st => { soundNote.hidden = st === 'running'; };
+Sound.onState(updateSoundNote);
+updateSoundNote(Sound.state);
+soundNote.addEventListener('click', () => Sound.init());
+
+window.addEventListener('keydown', e => {
+  if (e.target.closest('input, textarea')) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); $('#undo').click(); return; }
+  const o = state.selected;
+  const keyTools = { 1: 'rake', 2: 'wide', 3: 'stick', 4: 'ripple', 5: 'smooth' };
+  if (!o && keyTools[e.key]) { setTool(keyTools[e.key]); return; }
+  if (!o && (e.key === 't' || e.key === 'T')) { setView(state.view === '3d' ? 'top' : '3d'); return; }
+  if (!o) return;
+  let changed = true;
+  switch (e.key) {
+    case 'Delete': case 'Backspace': removeObject(o); return;
+    case 'Escape': select(null); return;
+    case 'r': o.rot += 15; break;
+    case 'R': o.rot -= 15; break;
+    case '+': case '=': o.scale = clamp(o.scale * 1.1, 0.4, 2.5); break;
+    case '-': case '_': o.scale = clamp(o.scale / 1.1, 0.4, 2.5); break;
+    case 'f': o.flip = !o.flip; break;
+    case 'ArrowLeft': o.x = clamp(o.x - 0.01, 0.03, 0.97); break;
+    case 'ArrowRight': o.x = clamp(o.x + 0.01, 0.03, 0.97); break;
+    case 'ArrowUp': o.y = clamp(o.y - 0.01, 0.03, 0.97); break;
+    case 'ArrowDown': o.y = clamp(o.y + 0.01, 0.03, 0.97); break;
+    default: changed = false;
+  }
+  if (changed) { e.preventDefault(); place(o); save(); }
+});
+
+const hint = $('#hint');
+function hideHint() { if (hint) hint.classList.add('gone'); }
+
+/* =============== animals =============== */
+function behave(o, dt, now) {
+  const a = o.a || (o.a = { pause: rand(0.5, 3), timer: rand(1.5, 5), target: null, dist: 0, side: 1 });
+  const m = o.item.move;
+  if (m === 'wander') wander(o, a, dt);
+  else if (m === 'hop') hop(o, a, dt);
+  else if (m === 'fly') fly(o, a, dt, now);
+}
+function wander(o, a, dt) {
+  if (a.pause > 0) { a.pause -= dt; a.walking = false; a.trail = null; return; }
+  if (!a.target) a.target = { x: clamp(o.x + rand(-0.22, 0.22), 0.08, 0.92), y: clamp(o.y + rand(-0.2, 0.2), 0.08, 0.92) };
+  const dx = a.target.x - o.x, dy = a.target.y - o.y, d = Math.hypot(dx, dy);
+  if (d < 0.004) { a.target = null; a.pause = rand(2, 7); save(); return; }
+  a.walking = true;
+  const step = Math.min(d, o.item.speed * dt);
+  o.x += dx / d * step; o.y += dy / d * step;
+  const want = Math.atan2(dy, dx) * 180 / Math.PI;
+  o.rot = lerpAngle(o.rot * Math.PI / 180, want * Math.PI / 180, Math.min(1, dt * 4)) * 180 / Math.PI;
+  o.flip = false;
+  place(o);
+  const s = worldSize(o) * 100, hx = Math.cos(o.rot * Math.PI / 180), hy = Math.sin(o.rot * Math.PI / 180);
+  if (o.item.trail === 'slime') {
+    const fx = o.x * 1000 - hx * s * 0.3, fy = o.y * 1000 - hy * s * 0.3;
+    if (!a.trail) a.trail = sand.beginLine(fx, fy, 6); else sand.extendLine(a.trail, fx, fy);
+  } else if (o.item.trail === 'feet') {
+    a.dist += step;
+    if (a.dist > 0.012) {
+      a.dist = 0; a.side *= -1;
+      const off = s * 0.24 * a.side;
+      sand.addDot(o.x * 1000 - hy * off, o.y * 1000 + hx * off, 3.2);
+    }
+  }
+}
+function hop(o, a, dt) {
+  if (a.hopping) {
+    const h = a.hopping;
+    h.p += dt / h.dur;
+    const p = Math.min(1, h.p), e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+    o.x = h.x0 + (h.x1 - h.x0) * e;
+    o.y = h.y0 + (h.y1 - h.y0) * e;
+    o.hopY = Math.sin(Math.PI * p) * h.height;
+    place(o);
+    if (p >= 1) {
+      a.hopping = null; o.hopY = 0;
+      const s = worldSize(o) * 100, hx = Math.cos(o.rot * Math.PI / 180), hy = Math.sin(o.rot * Math.PI / 180);
+      for (const side of [-1, 1]) sand.addDot(o.x * 1000 - hy * s * 0.2 * side, o.y * 1000 + hx * s * 0.2 * side, Math.max(2.5, s * 0.05));
+      Sound.land(o.item.voice);
+      a.timer = rand(o.item.rest[0], o.item.rest[1]);
+    }
+    return;
+  }
+  a.timer -= dt;
+  if (a.timer > 0) return;
+  const ang = Math.random() * Math.PI * 2, dist = rand(o.item.hopDist[0], o.item.hopDist[1]);
+  const x1 = clamp(o.x + Math.cos(ang) * dist, 0.08, 0.92), y1 = clamp(o.y + Math.sin(ang) * dist, 0.08, 0.92);
+  o.rot = Math.atan2(y1 - o.y, x1 - o.x) * 180 / Math.PI;
+  o.flip = false;
+  a.hopping = { p: 0, x0: o.x, y0: o.y, x1, y1, dur: o.item.hopDur, height: o.item.hopHeight / 100 * 0.9 };
+  if (Math.random() < 0.2) Sound.voice(o.item.voice, 0.3);
+}
+function fly(o, a, dt, now) {
+  const cruise = 1.3 / worldSize(o);
+  if (a.pause > 0) {
+    a.pause -= dt; a.resting = true;
+    const want = a.perchY ?? 0;
+    o.flyY += (want - o.flyY) * Math.min(1, dt * 6);
+    return;
+  }
+  a.resting = false;
+  if (!a.target) {
+    const perches = state.objects.filter(p => p !== o && (p.item.cat === 'plants' || p.item.cat === 'rocks' || p.id === 'lantern'));
+    if (perches.length && Math.random() < 0.6) {
+      const p = perches[Math.floor(Math.random() * perches.length)];
+      a.target = { x: p.x + rand(-0.01, 0.01), y: p.y + rand(-0.01, 0.01), perchY: (p.h * worldSize(p)) / worldSize(o) };
+    } else a.target = { x: rand(0.08, 0.92), y: rand(0.08, 0.92), perchY: 0 };
+  }
+  const dx = a.target.x - o.x, dy = a.target.y - o.y, d = Math.hypot(dx, dy);
+  if (d < 0.01) { a.pause = a.target.perchY ? rand(3, 8) : rand(1, 3); a.perchY = a.target.perchY; a.target = null; save(); return; }
+  const ang = Math.atan2(dy, dx) + Math.sin(now / 170 + o.uid) * 0.5;
+  const step = Math.min(d, o.item.speed * dt);
+  o.x += Math.cos(ang) * step; o.y += Math.sin(ang) * step;
+  o.rot = ang * 180 / Math.PI;
+  const want = d < 0.05 ? (a.target.perchY || 0) + 0.3 : cruise + Math.sin(now / 300 + o.uid) * 0.3;
+  o.flyY += (want - o.flyY) * Math.min(1, dt * 3);
+  place(o);
+}
+
+/* =============== main loop =============== */
+const clock = new THREE.Clock();
+let saveClock = 0;
+const tmpV = new THREE.Vector3();
+function frame() {
+  const dt = Math.min(0.05, clock.getDelta()), t = clock.elapsedTime, now = performance.now();
+  stepView(dt);
+  controls.update();
+
+  if (state.roam && !document.hidden) {
+    for (const o of state.objects) if (o.item.move && !o.dragging) behave(o, dt, now);
+    saveClock += dt;
+    if (saveClock > 5) { saveClock = 0; save(); }
+  }
+
+  const all = scene.children.filter(c => c.userData.obj);
+  for (const root of all) {
+    const o = root.userData.obj;
+    if (o.dying !== undefined) {
+      o.dying -= dt;
+      const k = Math.max(0, o.dying / 0.25);
+      o.lift.scale.setScalar(k);
+      if (o.dying <= 0) scene.remove(root);
+      continue;
+    }
+    let y = o.hopY + o.flyY, sx = 1, sy = 1;
+    if (o.dropT > 0) {
+      o.dropT = Math.max(0, o.dropT - dt / 0.45);
+      const p = 1 - o.dropT;
+      y += Math.max(0, 1 - p * 1.6) * 0.9;
+      const sq = p > 0.6 ? Math.sin((p - 0.6) / 0.4 * Math.PI) * 0.12 : 0;
+      sx += sq; sy -= sq;
+    }
+    if (o.pokeT > 0) {
+      o.pokeT = Math.max(0, o.pokeT - dt);
+      const p = 1 - o.pokeT / 0.6;
+      y += Math.sin(Math.min(1, p * 1.4) * Math.PI) * 0.3;
+      const sq = Math.sin(p * Math.PI * 2) * 0.1 * (1 - p);
+      sx += sq; sy -= sq;
+    }
+    if (o.dragging) y += 0.35;
+    o.lift.position.y = y;
+    o.lift.scale.set(sx, sy, sx);
+    if (o.model.userData.update) o.model.userData.update(t, o);
+  }
+
+  // selection ring + toolbar follow the selected object
+  const sel = state.selected;
+  if (sel) {
+    const s = worldSize(sel);
+    selRing.position.set(sel.root.position.x, 0.04, sel.root.position.z);
+    selRing.scale.setScalar(s);
+    if (!bar.hidden) {
+      tmpV.set(sel.root.position.x, 0, sel.root.position.z + s * 0.6).project(camera);
+      let sx = (tmpV.x * 0.5 + 0.5) * view.clientWidth, sy = (-tmpV.y * 0.5 + 0.5) * view.clientHeight;
+      if (sy > view.clientHeight - 120) {
+        tmpV.set(sel.root.position.x, sel.h * s + 0.2, sel.root.position.z).project(camera);
+        sy = (-tmpV.y * 0.5 + 0.5) * view.clientHeight - 54;
+      }
+      bar.style.left = clamp(sx, 130, view.clientWidth - 130) + 'px';
+      bar.style.top = clamp(sy + 10, 60, view.clientHeight - 110) + 'px';
+    }
+  }
+
+  // hand tool
+  const tm = toolMeshes[state.tool];
+  tm.visible = tool.show;
+  if (tool.show) {
+    if (tool.snap) { tool.pos.copy(tool.target); tool.angle = tool.targetAngle; tool.snap = false; }
+    tool.pos.lerp(tool.target, tool.active ? 0.6 : 0.35);
+    tool.angle = lerpAngle(tool.angle, tool.targetAngle, tool.active ? 0.25 : 0.15);
+    const wantY = tool.active ? -0.025 : 0.35;
+    tool.y += (wantY - tool.y) * 0.3;
+    tm.position.set(tool.pos.x, tool.y, tool.pos.z);
+    tm.rotation.set(0, -tool.angle, 0);
+  } else tool.snap = true;
+
+  if (sand.dirty) { colorTex.needsUpdate = true; heightTex.needsUpdate = true; sand.dirty = false; }
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+/* =============== save / load =============== */
+let saveT = null;
+function save() { clearTimeout(saveT); saveT = setTimeout(doSave, 400); }
+function doSave() {
+  saveT = null;
+  const data = {
+    v: 2, sand: state.sandColor, frame: state.frame, roam: state.roam, view: state.view,
+    muted: Sound.muted, ambient: Sound.getAmbient(),
+    objects: state.objects.map(o => ({ id: o.id, x: +o.x.toFixed(4), y: +o.y.toFixed(4), rot: Math.round(o.rot), scale: +o.scale.toFixed(3), flip: o.flip })),
+    ops: sand.liveOps(),
   };
-  canvas.addEventListener('pointerup', endStroke);
-  canvas.addEventListener('pointercancel', endStroke);
-  canvas.addEventListener('lostpointercapture', endStroke);
-
-  /* ---------------- tools & controls ---------------- */
-  function setTool(name) {
-    state.tool = name;
-    tray.dataset.tool = name;
-    $$('.tool').forEach(b => b.setAttribute('aria-pressed', b.dataset.tool === name));
+  try { localStorage.setItem(KEY, JSON.stringify(data)); }
+  catch (e) {
+    try { data.ops = data.ops.filter(op => !op.auto); localStorage.setItem(KEY, JSON.stringify(data)); } catch (e2) { /* storage full or blocked */ }
   }
-  $$('.tool').forEach(b => b.addEventListener('click', () => { Sound.init(); Sound.tick(); setTool(b.dataset.tool); }));
+}
+const flush = () => { if (saveT) { clearTimeout(saveT); doSave(); } };
+window.addEventListener('pagehide', flush);
+document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
 
-  const sandSw = $('#sandSwatches');
-  SAND_COLORS.forEach(([name, hex]) => {
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'swatch'; b.title = name + ' sand';
-    b.setAttribute('aria-label', name + ' sand');
-    b.style.background = hex; b.dataset.hex = hex;
-    b.addEventListener('click', () => { Sound.init(); Sound.tick(); setSand(hex); save(); });
-    sandSw.appendChild(b);
+function load() {
+  let data = null;
+  try { data = JSON.parse(localStorage.getItem(KEY)); } catch (e) { data = null; }
+  if (!data || !Array.isArray(data.objects)) { starterGarden(); return; }
+  setSand(data.sand || SAND_COLORS[0][1]);
+  setFrame(data.frame || 'birch');
+  sand.load(data.ops || []);
+  data.objects.forEach(o => {
+    // v1 butterflies stored "heading + 90" because the 2D art faced up
+    const rot = data.v === 1 && o.id === 'butterfly' ? o.rot - 90 : o.rot;
+    const flipAnimal = data.v === 1 && ITEM[o.id] && ITEM[o.id].animal && o.flip;
+    addObject(o.id, o.x, o.y, { rot: flipAnimal ? 180 : rot, scale: o.scale, flip: flipAnimal ? false : o.flip, silent: true });
   });
-  function setSand(hex) {
-    state.sandColor = hex;
-    sand.setColor(hex);
-    $$('.swatch', sandSw).forEach(b => b.setAttribute('aria-pressed', b.dataset.hex === hex));
-  }
+  state.roam = data.roam !== false;
+  $('#roam').checked = state.roam;
+  if (data.ambient) for (const k in data.ambient) Sound.setAmbient(k, !!data.ambient[k]);
+  if (data.muted) { Sound.setMuted(true); muteBtn.setAttribute('aria-pressed', 'true'); }
+  hideHint();
+}
+function starterGarden() {
+  setSand(SAND_COLORS[0][1]);
+  setFrame('birch');
+  sand.reset();
+  const wave = x0 => {
+    sand.begin({ t: 'rake', n: 9, sp: 13, w: 6 }, x0, -80);
+    for (let y = -80; y <= 1060; y += 8) sand.extend(x0 + Math.sin(y / 95) * 34, y);
+    sand.end();
+  };
+  wave(660); wave(780); wave(900);
+  sand.ring(360, 400, 82, { n: 6, sp: 17, w: 7 }, false);
+  [
+    ['airplant', 0.36, 0.4], ['river', 0.17, 0.74, { rot: -10 }], ['quartz', 0.82, 0.17],
+    ['moss', 0.75, 0.13], ['amethyst', 0.72, 0.84], ['blush', 0.14, 0.15, { scale: 0.8 }],
+    ['frog', 0.47, 0.76, { rot: -30 }], ['snail', 0.3, 0.9],
+  ].forEach(([id, x, y, o]) => addObject(id, x, y, Object.assign({ silent: true }, o)));
+}
 
-  const frameSw = $('#frameSwatches');
-  Object.entries(FRAMES).forEach(([key, [name, c1, c2]]) => {
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'swatch'; b.title = name + ' frame';
-    b.setAttribute('aria-label', name + ' frame');
-    b.style.background = `linear-gradient(135deg, ${c1}, ${c2})`; b.dataset.key = key;
-    b.addEventListener('click', () => { Sound.init(); Sound.tick(); setFrame(key); save(); });
-    frameSw.appendChild(b);
-  });
-  function setFrame(key) {
-    if (!FRAMES[key]) key = 'birch';
-    state.frame = key;
-    tray.style.setProperty('--wood1', FRAMES[key][1]);
-    tray.style.setProperty('--wood2', FRAMES[key][2]);
-    tray.classList.toggle('dark-frame', key === 'walnut' || key === 'ebony');
-    $$('.swatch', frameSw).forEach(b => b.setAttribute('aria-pressed', b.dataset.key === key));
-  }
+/* =============== save picture =============== */
+$('#save').addEventListener('click', () => {
+  Sound.tick();
+  const wasRing = selRing.visible, wasTool = toolMeshes[state.tool].visible;
+  selRing.visible = false; toolMeshes[state.tool].visible = false;
+  renderer.render(scene, camera);
+  view.toBlob(blob => {
+    if (!blob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'my-zen-garden.png';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }, 'image/png');
+  selRing.visible = wasRing; toolMeshes[state.tool].visible = wasTool;
+});
 
-  $('#undo').addEventListener('click', () => { Sound.init(); if (sand.undo()) { Sound.undo(); save(); } });
-  $('#clear').addEventListener('click', () => { Sound.init(); Sound.clear(); sand.clear(); save(); });
-  $('#reset').addEventListener('click', () => {
-    if (!confirm('Start a new, empty garden? Your current one will be cleared.')) return;
-    Sound.init(); Sound.clear();
-    select(null);
-    state.objects.forEach(o => o.el.remove());
-    state.objects = [];
-    sand.reset();
-    save();
-  });
-  $('#roam').addEventListener('change', e => {
-    state.roam = e.target.checked;
-    if (!state.roam) state.objects.forEach(o => { o.el.classList.remove('walking'); if (o.a) { o.a.hopping = null; o.hop.style.transform = ''; } });
-    save();
-  });
-
-  // sound buttons
-  const muteBtn = $('#mute');
-  muteBtn.addEventListener('click', () => {
-    Sound.init();
-    Sound.setMuted(!Sound.muted);
-    muteBtn.setAttribute('aria-pressed', Sound.muted);
-    muteBtn.title = Sound.muted ? 'Unmute' : 'Mute';
-    save();
-  });
-  $$('[data-amb]').forEach(b => b.addEventListener('click', () => {
-    Sound.init();
-    const on = b.getAttribute('aria-pressed') !== 'true';
-    Sound.setAmbient(b.dataset.amb, on);
-    b.setAttribute('aria-pressed', on);
-    save();
-  }));
-  function syncAmbientButtons() {
-    const a = Sound.getAmbient();
-    $$('[data-amb]').forEach(b => b.setAttribute('aria-pressed', !!a[b.dataset.amb]));
-  }
-
-  // keyboard
-  window.addEventListener('keydown', e => {
-    if (e.target.closest('input, textarea')) return;
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); $('#undo').click(); return; }
-    const o = state.selected;
-    const keyTools = { 1: 'rake', 2: 'wide', 3: 'stick', 4: 'ripple', 5: 'smooth' };
-    if (!o && keyTools[e.key]) { setTool(keyTools[e.key]); return; }
-    if (!o) return;
-    let changed = true;
-    switch (e.key) {
-      case 'Delete': case 'Backspace': removeObject(o); return;
-      case 'Escape': select(null); return;
-      case 'r': o.rot += 15; break;
-      case 'R': o.rot -= 15; break;
-      case '+': case '=': o.scale = clamp(o.scale * 1.1, 0.4, 2.5); break;
-      case '-': case '_': o.scale = clamp(o.scale / 1.1, 0.4, 2.5); break;
-      case 'f': o.flip = !o.flip; break;
-      case 'ArrowLeft': o.x = clamp(o.x - 0.01, 0.03, 0.97); break;
-      case 'ArrowRight': o.x = clamp(o.x + 0.01, 0.03, 0.97); break;
-      case 'ArrowUp': o.y = clamp(o.y - 0.01, 0.03, 0.97); break;
-      case 'ArrowDown': o.y = clamp(o.y + 0.01, 0.03, 0.97); break;
-      default: changed = false;
-    }
-    if (changed) { e.preventDefault(); render(o); save(); }
-  });
-
-  // first-visit hint
-  const hint = $('#hint');
-  function hideHint() { if (hint && !hint.classList.contains('gone')) hint.classList.add('gone'); }
-
-  /* ---------------- animals ---------------- */
-  let lastT = performance.now(), saveClock = 0;
-  function tick(now) {
-    const dt = Math.min(0.05, (now - lastT) / 1000);
-    lastT = now;
-    if (state.roam && !document.hidden) {
-      for (const o of state.objects) if (o.item.move && !o.dragging) behave(o, dt, now);
-      saveClock += dt;
-      if (saveClock > 4) { saveClock = 0; save(); }
-    }
-    requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
-
-  function behave(o, dt, now) {
-    const a = o.a || (o.a = { pause: rand(0.5, 3), timer: rand(1.5, 5), target: null, dist: 0, side: 1 });
-    const m = o.item.move;
-    if (m === 'wander') wander(o, a, dt);
-    else if (m === 'hop') hop(o, a, dt);
-    else if (m === 'fly') fly(o, a, dt, now);
-  }
-  const footPos = o => ({ x: o.x * 1000, y: (o.y + o.item.size * o.scale * o.item.foot) * 1000 });
-
-  function wander(o, a, dt) {
-    if (a.pause > 0) {
-      a.pause -= dt;
-      if (a.walking) { a.walking = false; o.el.classList.remove('walking'); a.trail = null; }
-      return;
-    }
-    if (!a.target) a.target = { x: clamp(o.x + rand(-0.22, 0.22), 0.08, 0.92), y: clamp(o.y + rand(-0.18, 0.18), 0.1, 0.9) };
-    const dx = a.target.x - o.x, dy = a.target.y - o.y, d = Math.hypot(dx, dy);
-    if (d < 0.004) { a.target = null; a.pause = rand(2, 7); return; }
-    if (!a.walking) { a.walking = true; o.el.classList.add('walking'); }
-    const step = Math.min(d, o.item.speed * dt);
-    o.x += dx / d * step; o.y += dy / d * step;
-    if (Math.abs(dx) > 0.003) o.flip = dx < 0;
-    render(o);
-    const f = footPos(o);
-    if (o.item.trail === 'slime') {
-      if (!a.trail) a.trail = sand.beginLine(f.x, f.y, 5);
-      else sand.extendLine(a.trail, f.x, f.y);
-    } else if (o.item.trail === 'feet') {
-      a.dist += step;
-      if (a.dist > 0.012) {
-        a.dist = 0; a.side *= -1;
-        const off = 10 * a.side;
-        sand.addDot(f.x + (-dy / d) * off, f.y + (dx / d) * off * 0.5, 3.2);
-      }
-    }
-  }
-
-  function hop(o, a, dt) {
-    if (a.hopping) {
-      const h = a.hopping;
-      h.p += dt / h.dur;
-      const p = Math.min(1, h.p), e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-      o.x = h.x0 + (h.x1 - h.x0) * e;
-      o.y = h.y0 + (h.y1 - h.y0) * e;
-      o.hop.style.transform = `translateY(${(-Math.sin(Math.PI * p) * h.height).toFixed(1)}%)`;
-      render(o);
-      if (p >= 1) {
-        a.hopping = null;
-        o.hop.style.transform = '';
-        const f = footPos(o), s = o.item.size * o.scale * 1000;
-        sand.addDot(f.x - s * 0.14, f.y, Math.max(2.5, s * 0.045));
-        sand.addDot(f.x + s * 0.14, f.y, Math.max(2.5, s * 0.045));
-        Sound.land(o.item.voice);
-        a.timer = rand(o.item.rest[0], o.item.rest[1]);
-      }
-      return;
-    }
-    a.timer -= dt;
-    if (a.timer > 0) return;
-    const ang = Math.random() * Math.PI * 2, dist = rand(o.item.hopDist[0], o.item.hopDist[1]);
-    const x1 = clamp(o.x + Math.cos(ang) * dist, 0.08, 0.92), y1 = clamp(o.y + Math.sin(ang) * dist * 0.8, 0.1, 0.9);
-    if (Math.abs(x1 - o.x) > 0.005) o.flip = x1 < o.x;
-    a.hopping = { p: 0, x0: o.x, y0: o.y, x1, y1, dur: o.item.hopDur, height: o.item.hopHeight };
-    if (Math.random() < 0.2) Sound.voice(o.item.voice, 0.3);
-  }
-
-  function fly(o, a, dt, now) {
-    if (a.pause > 0) {
-      a.pause -= dt;
-      if (!a.resting) { a.resting = true; o.el.classList.add('resting'); }
-      return;
-    }
-    if (a.resting) { a.resting = false; o.el.classList.remove('resting'); }
-    if (!a.target) {
-      const perches = state.objects.filter(p => p !== o && (p.item.cat === 'plants' || p.id === 'pond'));
-      if (perches.length && Math.random() < 0.55) {
-        const p = perches[Math.floor(Math.random() * perches.length)];
-        a.target = { x: p.x + rand(-0.02, 0.02), y: p.y - p.item.size * p.scale * 0.15, perch: true };
-      } else a.target = { x: rand(0.06, 0.94), y: rand(0.06, 0.94) };
-    }
-    const dx = a.target.x - o.x, dy = a.target.y - o.y, d = Math.hypot(dx, dy);
-    if (d < 0.01) { a.pause = a.target.perch ? rand(3, 8) : rand(0.4, 1.8); a.target = null; return; }
-    const ang = Math.atan2(dy, dx) + Math.sin(now / 170 + o.uid) * 0.5;
-    const step = Math.min(d, o.item.speed * dt);
-    o.x += Math.cos(ang) * step; o.y += Math.sin(ang) * step;
-    o.rot = ang * 180 / Math.PI + 90;
-    render(o);
-  }
-
-  /* ---------------- save / load ---------------- */
-  let saveT = null;
-  function save() { clearTimeout(saveT); saveT = setTimeout(doSave, 400); }
-  function doSave() {
-    const data = {
-      v: 1, sand: state.sandColor, frame: state.frame, roam: state.roam,
-      muted: Sound.muted, ambient: Sound.getAmbient(),
-      objects: state.objects.map(o => ({ id: o.id, x: +o.x.toFixed(4), y: +o.y.toFixed(4), rot: Math.round(o.rot), scale: +o.scale.toFixed(3), flip: o.flip })),
-      ops: sand.liveOps(),
-    };
-    try { localStorage.setItem(KEY, JSON.stringify(data)); }
-    catch (e) {
-      try { data.ops = data.ops.filter(op => !op.auto); localStorage.setItem(KEY, JSON.stringify(data)); } catch (e2) { /* storage full or blocked */ }
-    }
-  }
-  // flush any pending save when the tab is closed or hidden
-  const flush = () => { if (saveT) { clearTimeout(saveT); saveT = null; doSave(); } };
-  window.addEventListener('pagehide', flush);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
-
-  function load() {
-    let data = null;
-    try { data = JSON.parse(localStorage.getItem(KEY)); } catch (e) { data = null; }
-    if (!data || !Array.isArray(data.objects)) { starterGarden(); return; }
-    setSand(data.sand || SAND_COLORS[0][1]);
-    setFrame(data.frame || 'birch');
-    sand.load(data.ops || []);
-    data.objects.forEach(o => addObject(o.id, o.x, o.y, { rot: o.rot, scale: o.scale, flip: o.flip, silent: true }));
-    state.roam = data.roam !== false;
-    $('#roam').checked = state.roam;
-    if (data.ambient) for (const k in data.ambient) Sound.setAmbient(k, !!data.ambient[k]);
-    if (data.muted) { Sound.setMuted(true); muteBtn.setAttribute('aria-pressed', 'true'); }
-    if (hint) hint.classList.add('gone');
-  }
-
-  // A first garden inspired by a classic desk zen garden: rings around an
-  // air plant on one side, waves on the other.
-  function starterGarden() {
-    setSand(SAND_COLORS[0][1]);
-    setFrame('birch');
-    sand.reset();
-    const wave = (x0, amp) => {
-      sand.begin({ t: 'rake', n: 9, sp: 13, w: 6 }, x0, -80);
-      for (let y = -80; y <= 1060; y += 8) sand.extend(x0 + Math.sin(y / 95) * amp, y);
-      sand.end();
-    };
-    wave(660, 34); wave(780, 34); wave(900, 34);
-    sand.ring(360, 400, 82, { n: 6, sp: 17, w: 7 }, false);
-    [
-      ['airplant', 0.36, 0.4], ['river', 0.17, 0.74, { rot: -10 }], ['quartz', 0.82, 0.17],
-      ['moss', 0.75, 0.13], ['amethyst', 0.72, 0.84], ['blush', 0.14, 0.15, { scale: 0.8 }],
-      ['frog', 0.47, 0.76], ['snail', 0.3, 0.9],
-    ].forEach(([id, x, y, o]) => addObject(id, x, y, Object.assign({ silent: true }, o)));
-  }
-
-  /* ---------------- save picture ---------------- */
-  function loadSvg(svg) {
-    return new Promise((res, rej) => {
-      const img = new Image();
-      const sized = svg.replace('<svg ', '<svg width="400" height="400" ');
-      img.onload = () => res(img);
-      img.onerror = rej;
-      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(sized);
-    });
-  }
-  $('#save').addEventListener('click', async () => {
-    Sound.init(); Sound.tick();
-    const S = 1400, pad = 70, inner = S - pad * 2;
-    const c = document.createElement('canvas');
-    c.width = c.height = S;
-    const x = c.getContext('2d');
-    const [, w1, w2] = FRAMES[state.frame];
-    const g = x.createLinearGradient(0, 0, S, S);
-    g.addColorStop(0, w1); g.addColorStop(1, w2);
-    x.fillStyle = g;
-    x.fillRect(0, 0, S, S);
-    x.globalAlpha = 0.07;
-    for (let i = 0; i < 90; i++) {
-      x.strokeStyle = i % 2 ? '#000' : '#fff';
-      x.lineWidth = 1 + Math.random() * 2;
-      const yy = Math.random() * S;
-      x.beginPath(); x.moveTo(0, yy); x.bezierCurveTo(S / 3, yy + rand(-10, 10), S * 2 / 3, yy + rand(-10, 10), S, yy); x.stroke();
-    }
-    x.globalAlpha = 1;
-    x.drawImage(canvas, pad, pad, inner, inner);
-    // soft inner shadow where the sand meets the frame
-    x.save();
-    x.beginPath(); x.rect(pad, pad, inner, inner); x.clip();
-    x.shadowColor = 'rgba(70,50,25,0.45)'; x.shadowBlur = 22; x.shadowOffsetX = 6; x.shadowOffsetY = 8;
-    x.lineWidth = 40; x.strokeStyle = '#000';
-    x.strokeRect(pad - 20, pad - 20, inner + 40, inner + 40);
-    x.restore();
-    const sorted = [...state.objects].sort((a, b) => (parseInt(a.el.style.zIndex) || 0) - (parseInt(b.el.style.zIndex) || 0));
-    for (const o of sorted) {
-      try {
-        const img = await loadSvg(o.item.svg);
-        const size = o.item.size * o.scale * inner;
-        x.save();
-        x.translate(pad + o.x * inner, pad + o.y * inner);
-        x.rotate(o.rot * Math.PI / 180);
-        x.scale(o.flip ? -1 : 1, 1);
-        x.shadowColor = 'rgba(70,50,25,0.35)';
-        x.shadowBlur = 8; x.shadowOffsetX = o.item.fly ? 10 : 4; x.shadowOffsetY = o.item.fly ? 16 : 7;
-        x.drawImage(img, -size / 2, -size / 2, size, size);
-        x.restore();
-      } catch (e) { /* skip an object that fails to render */ }
-    }
-    c.toBlob(blob => {
-      if (!blob) return;
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'my-zen-garden.png';
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    }, 'image/png');
-  });
-
-  setTool('rake');
-  load();
-  syncAmbientButtons();
-})();
+/* =============== go =============== */
+setTool('rake');
+load();
+$$('[data-amb]').forEach(b => b.setAttribute('aria-pressed', !!Sound.getAmbient()[b.dataset.amb]));
+camera.position.set(0, Math.cos(VIEWS['3d']) * 20, Math.sin(VIEWS['3d']) * 20);
+controls.target.set(0, -0.2, 0.9);
+resize();
+$$('[data-view]').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === '3d'));
+document.body.classList.add('ready');
+frame();

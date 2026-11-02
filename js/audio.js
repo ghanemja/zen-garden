@@ -9,20 +9,47 @@
   const PENTA = [392, 440, 523.25, 587.33, 659.25, 783.99, 880, 1046.5];
   const rand = (a, b) => a + Math.random() * (b - a);
 
+  let unlocked = false;
+  const listeners = new Set();
+  const notify = () => listeners.forEach(fn => { try { fn(ctx ? ctx.state : 'none'); } catch (e) { /* ignore */ } });
+
   function init() {
-    if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+    if (ctx) {
+      if (ctx.state !== 'running') ctx.resume().then(notify, () => {});
+      return;
+    }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* not supported */ }
     ctx = new AC();
+    ctx.onstatechange = notify;
+    if (ctx.state !== 'running') ctx.resume().then(notify, () => {});
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -16; comp.ratio.value = 4;
     master = ctx.createGain();
-    master.gain.value = muted ? 0 : 0.85;
+    master.gain.value = muted ? 0 : 1;
     master.connect(comp); comp.connect(ctx.destination);
     white = makeNoise(false); brown = makeNoise(true);
     setupRake();
     for (const k in amb) if (amb[k]) startAmb(k);
+    notify();
   }
+
+  // Browsers (Safari especially) only allow audio to start from certain
+  // gestures, so try on every kind of click, tap and key press until it runs.
+  function unlock() {
+    init();
+    if (!ctx) return;
+    if (!unlocked) {
+      const b = ctx.createBuffer(1, 1, 22050), s = ctx.createBufferSource();
+      s.buffer = b; s.connect(ctx.destination); s.start(0);
+      unlocked = true;
+    }
+    if (ctx.state === 'running') {
+      ['pointerdown', 'pointerup', 'mousedown', 'click', 'touchend', 'keydown'].forEach(ev => window.removeEventListener(ev, unlock, true));
+    }
+  }
+  ['pointerdown', 'pointerup', 'mousedown', 'click', 'touchend', 'keydown'].forEach(ev => window.addEventListener(ev, unlock, true));
 
   function makeNoise(isBrown) {
     const len = ctx.sampleRate * 3, b = ctx.createBuffer(1, len, ctx.sampleRate), d = b.getChannelData(0);
@@ -77,7 +104,7 @@
     if (!rakeN) return;
     const t = ctx.currentTime, v = Math.min(1, speed / 2.2);
     const base = { rake: 1900, wide: 1500, stick: 2800, smooth: 800 }[tool] || 1800;
-    const vol = (tool === 'smooth' ? 0.32 : tool === 'stick' ? 0.2 : 0.3) * (0.25 + v * 0.75);
+    const vol = (tool === 'smooth' ? 0.42 : tool === 'stick' ? 0.28 : 0.42) * (0.25 + v * 0.75);
     rakeN.bp.frequency.setTargetAtTime(base * (0.8 + v * 0.5) + Math.random() * 250, t, 0.03);
     for (const [g, k] of [[rakeN.g, 1], [rakeN.g2, 0.9]]) {
       g.gain.cancelScheduledValues(t);
@@ -217,7 +244,7 @@
   function chimeLoop() {
     const n = 1 + Math.floor(Math.random() * 3);
     let t = 0;
-    for (let i = 0; i < n; i++) { bell(PENTA[Math.floor(Math.random() * PENTA.length)], 0.045, t); t += rand(0.15, 0.5); }
+    for (let i = 0; i < n; i++) { bell(PENTA[Math.floor(Math.random() * PENTA.length)], 0.07, t); t += rand(0.15, 0.5); }
     chimeTimer = setTimeout(chimeLoop, rand(3500, 9000));
   }
   function startAmb(k) {
@@ -269,7 +296,9 @@
     voice: safe(voice), land: safe(land),
     setAmbient(k, on) { amb[k] = on; if (ctx) (on ? startAmb : stopAmb)(k); },
     getAmbient: () => ({ ...amb }),
-    setMuted(m) { muted = m; if (master) master.gain.setTargetAtTime(m ? 0 : 0.85, ctx.currentTime, 0.05); },
+    setMuted(m) { muted = m; if (master) master.gain.setTargetAtTime(m ? 0 : 1, ctx.currentTime, 0.05); },
+    get state() { return ctx ? ctx.state : 'none'; },
+    onState(fn) { listeners.add(fn); },
     get muted() { return muted; },
   };
 })();

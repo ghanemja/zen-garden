@@ -1,10 +1,12 @@
 # Zen Garden 🪨
 
-A little desktop zen garden in your browser. Drag in stones, plants, decorations and tiny animals, rake patterns into the sand, and listen to wind chimes while you do it.
+A little 3D desktop zen garden in your browser. Drag in stones, plants, decorations and tiny animals, rake patterns into the sand, and listen to wind chimes while you do it.
+
+It's real 3D, built with [three.js](https://threejs.org): a wooden tray with depth, soft shadows, and rake grooves that are actually pressed into the sand. A 3D rake, stick or smoother follows your cursor and drags through the sand as you work.
 
 ## Play
 
-It's plain HTML/JS: no build step, no dependencies, no audio files (every sound is synthesized live).
+It's plain HTML/JS: no build step and no audio files (every sound is synthesized live). three.js loads from a CDN.
 
 ```bash
 python3 -m http.server 8000
@@ -21,6 +23,7 @@ Then open http://localhost:8000. You can also just double-click `index.html`.
   - *Plants*: air plant, blushing air plant, moss, succulent, bonsai, bamboo
   - *Decor*: stone lantern (it glows), bridge, koi pond (the koi swim), torii gate, shell, candle (it flickers)
   - *Animals*: frog, turtle, sleepy cat, sparrow, snail, bunny, butterfly
+- **Look around**: right-drag (or two fingers) to turn the garden, and scroll or pinch to zoom. The *3D* / *Top* buttons switch between an angled view and looking straight down.
 - **Arrange**: drag to move. Select something to get a toolbar for rotate, resize, flip and remove. You can also drag it out of the tray to remove it.
 - **Rake the sand** with five tools:
   - *Rake* (5 tines) and *Wide rake* (9 tines) for flowing lines and waves
@@ -31,7 +34,7 @@ Then open http://localhost:8000. You can also just double-click `index.html`.
 - **Sounds**: sand scraping that follows how fast you rake, a stone clack, a plant rustle, and animal voices, plus optional *Wind*, *Chimes* and *Stream* ambience and a mute button
 - **Customize**: six sand colours (classic, white, pearl, rose, sea glass, charcoal) and five frames (birch, walnut, ebony, bamboo, stone)
 - **Undo** strokes, **Smooth all**, or start a **New garden**
-- **Save picture**: downloads a PNG of your garden
+- **Save picture**: downloads a PNG of your garden from the current camera angle
 - Your garden is **saved automatically** in your browser
 
 ### Keyboard
@@ -46,16 +49,18 @@ Then open http://localhost:8000. You can also just double-click `index.html`.
 | Arrow keys | Nudge the selected item |
 | `Delete` | Remove the selected item |
 | `Esc` | Deselect |
+| `T` | Switch between the 3D and top views |
 
 ## Code
 
 | File | What it does |
 | --- | --- |
-| `js/items.js` | The object library. Every item is a hand-drawn 100×100 SVG |
-| `js/sand.js` | The sand canvas. Each stroke is stored so it can be redrawn, undone and saved |
+| `js/items.js` | The item list (names, sizes, how animals move) and the SVG icons in the picker |
+| `js/models.js` | The 3D models for every item, plus the rake, stick and smoother tools |
+| `js/sand.js` | The sand. Each stroke is stored so it can be redrawn, undone and saved, and painted into a colour map and a height map |
 | `js/audio.js` | All sound effects and ambience, built with the Web Audio API |
-| `js/app.js` | Drag and drop, selection, tools, animal behaviour, saving and the picture export |
-| `css/style.css` | Layout and the little animations (blinking, breathing, flapping, flickering) |
+| `js/app.js` | The 3D scene, camera, picking, drag and drop, raking, animal behaviour, saving and the picture export |
+| `css/style.css` | Layout |
 
 ## License
 
