@@ -25,8 +25,8 @@ const TOOLS = {
   pour:   { kind: 'pour', r: 75 },
 };
 const SAND_COLORS = [
-  ['Classic', '#e8dcc4'], ['White', '#f2eee6'], ['Pearl', '#d4d0c7'],
-  ['Rose', '#ecd3c7'], ['Sea glass', '#cfe0d5'], ['Charcoal', '#5a5753'],
+  ['Desert sand', '#d6b98a'], ['Beach sand', '#e4cfa3'], ['White', '#efe9dc'],
+  ['Pearl', '#cfc9bc'], ['Rose', '#e6c6b4'], ['Charcoal', '#5a5753'],
 ];
 const FRAMES = {
   birch:  ['Birch', '#e8cc98'],
@@ -965,7 +965,8 @@ function load() {
   let data = null;
   try { data = JSON.parse(localStorage.getItem(KEY)); } catch (e) { data = null; }
   if (!data || !Array.isArray(data.objects)) { starterGarden(); return; }
-  setSand(data.sand || SAND_COLORS[0][1]);
+  // the old near-white default becomes the new sandier one
+  setSand(!data.sand || data.sand === '#e8dcc4' ? SAND_COLORS[0][1] : data.sand);
   setFrame(data.frame || 'birch');
   sand.load(data.ops || []);
   data.objects.forEach(o => {

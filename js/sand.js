@@ -35,7 +35,7 @@
       this.cur = null;
       this.dirty = true;
       this.buildHeightBase();
-      this.setColor('#e8dcc4');
+      this.setColor('#d6b98a');
     }
 
     setColor(hex) {
@@ -57,21 +57,22 @@
       const S = this.S, t = this.tex.getContext('2d'), r = rng(1234);
       const img = t.createImageData(S, S), d = img.data;
       for (let i = 0; i < d.length; i += 4) {
-        const n = (r() - 0.5) * 16;
+        const n = (r() - 0.5) * 30;
         d[i] = c[0] + n; d[i + 1] = c[1] + n; d[i + 2] = c[2] + n * 0.9; d[i + 3] = 255;
       }
       t.putImageData(img, 0, 0);
       // individual grains in a mix of mineral colours
       const grains = [
-        [css(mix(c, [35, 25, 18], 0.6)), 0.06], [css(mix(c, [0, 0, 0], 0.22)), 0.16],
+        [css(mix(c, [35, 25, 18], 0.6)), 0.06], [css(mix(c, [40, 25, 10], 0.32)), 0.18],
         [css(mix(c, [190, 110, 50], 0.35)), 0.06], [css(mix(c, [120, 120, 120], 0.45)), 0.06],
-        [css(mix(c, [255, 255, 255], 0.3)), 0.2], [css(mix(c, [255, 252, 245], 0.75)), 0.08],
+        [css(mix(c, [255, 250, 235], 0.38)), 0.2], [css(mix(c, [255, 252, 245], 0.75)), 0.08],
       ];
       const rc = this.rc.getContext('2d');
       rc.fillStyle = 'rgb(245,245,245)'; rc.fillRect(0, 0, S, S);
       rc.fillStyle = 'rgb(40,40,40)';
-      for (let i = 0; i < 90000; i++) {
-        const x = Math.floor(r() * S), y = Math.floor(r() * S), sz = r() < 0.75 ? 1 : 2;
+      // grains are 2-3px so they still read as grains when the texture is viewed from a distance
+      for (let i = 0; i < 160000; i++) {
+        const x = Math.floor(r() * S), y = Math.floor(r() * S), sz = r() < 0.55 ? 2 : 3;
         let k = r(), g = 0;
         while (g < grains.length - 1 && k > grains[g][1]) { k -= grains[g][1]; g++; }
         if (k > grains[g][1]) continue; // most picks fall through: background stays
@@ -100,10 +101,10 @@
       }
       t.putImageData(img, 0, 0);
       // little clumps of grains so the surface feels loose and bumpy
-      for (let i = 0; i < 26000; i++) {
-        const v = r() < 0.5 ? BASE + 2 + r() * 3 : BASE - 2 - r() * 2;
+      for (let i = 0; i < 60000; i++) {
+        const v = r() < 0.5 ? BASE + 3 + r() * 4 : BASE - 3 - r() * 3;
         t.fillStyle = `rgb(${v},${v},${v})`;
-        t.beginPath(); t.arc(r() * S, r() * S, 0.8 + r() * 1.8, 0, 7); t.fill();
+        t.beginPath(); t.arc(r() * S, r() * S, 1 + r() * 1.6, 0, 7); t.fill();
       }
       // a few soft lumps so untouched sand isn't perfectly flat
       for (let i = 0; i < 40; i++) {

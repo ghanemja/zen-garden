@@ -38,7 +38,7 @@ Then open http://localhost:8000. (Double-clicking `index.html` won't work: brows
   - grains that fly over the frame land on the wood and the table and stay there. *Smooth all* sweeps them up
 - **Animals have a life of their own**: frogs, bunnies and sparrows hop around and leave little prints. The turtle walks and leaves footprints, the snail leaves a shiny trail, the butterfly flutters off to land on your plants, and the cat just naps. Tap any animal to hear it. Turn this off with *Animals roam*.
 - **Sounds**: sand scraping that follows how fast you rake, a stone clack, a plant rustle, and animal voices, plus optional *Wind*, *Chimes* and *Stream* ambience and a mute button
-- **Customize**: six sand colours (classic, white, pearl, rose, sea glass, charcoal) and five frames (birch, walnut, ebony, bamboo, stone)
+- **Customize**: six sand colours (desert, beach, white, pearl, rose, charcoal) and five frames (birch, walnut, ebony, bamboo, stone)
 - **Undo** strokes, **Smooth all**, or start a **New garden**
 - **Save picture**: downloads a PNG of your garden from the current camera angle
 - Your garden is **saved automatically** in your browser
