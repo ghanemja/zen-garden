@@ -103,8 +103,8 @@
   function rake(speed, tool) {
     if (!rakeN) return;
     const t = ctx.currentTime, v = Math.min(1, speed / 2.2);
-    const base = { rake: 1900, wide: 1500, stick: 2800, smooth: 800 }[tool] || 1800;
-    const vol = (tool === 'smooth' ? 0.42 : tool === 'stick' ? 0.28 : 0.42) * (0.25 + v * 0.75);
+    const base = { rake: 1900, wide: 1500, stick: 2800, smooth: 800, pour: 3600 }[tool] || 1800;
+    const vol = (tool === 'smooth' ? 0.42 : tool === 'stick' ? 0.28 : tool === 'pour' ? 0.3 : 0.42) * (0.25 + v * 0.75);
     rakeN.bp.frequency.setTargetAtTime(base * (0.8 + v * 0.5) + Math.random() * 250, t, 0.03);
     for (const [g, k] of [[rakeN.g, 1], [rakeN.g2, 0.9]]) {
       g.gain.cancelScheduledValues(t);
@@ -142,6 +142,7 @@
   }
   const pick = () => tone({ f: 700, f2: 1050, dur: 0.07, vol: 0.05 });
   const tick = () => tone({ f: 1500, dur: 0.03, vol: 0.04 });
+  const grain = () => burst({ type: 'highpass', f: 3000 + Math.random() * 4000, dur: 0.025, vol: 0.05 + Math.random() * 0.04 });
   const remove = () => burst({ f: 2200, f2: 300, q: 1.2, dur: 0.35, vol: 0.25 });
   const undo = () => tone({ f: 900, f2: 600, dur: 0.07, vol: 0.05 });
   const ripple = () => {
@@ -291,7 +292,7 @@
   window.Sound = {
     init,
     rake: safe(rake), rakeStop: safe(rakeStop),
-    place: safe(place), pick: safe(pick), tick: safe(tick), remove: safe(remove),
+    place: safe(place), pick: safe(pick), tick: safe(tick), grain: safe(grain), remove: safe(remove),
     undo: safe(undo), ripple: safe(ripple), clear: safe(clear),
     voice: safe(voice), land: safe(land),
     setAmbient(k, on) { amb[k] = on; if (ctx) (on ? startAmb : stopAmb)(k); },

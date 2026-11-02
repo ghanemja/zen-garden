@@ -10,13 +10,26 @@
   const R = v => Math.round(v);
   const MAX_AUTO_POINTS = 24000;
   const BASE = 128;
+  // Height values (128 = flat). The 3D view maps 0..255 to a range of about
+  // 0.6 units, which leaves room for poured piles above the flat sand.
+  const GROOVE = [[1.45, 124], [1.05, 119], [0.6, 114]];
+  const BERM = 132;
+  function rng(seed) {
+    return () => {
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
 
   class Sand {
     constructor() {
       this.S = 1000;
       const mk = () => { const c = document.createElement('canvas'); c.width = c.height = this.S; return c; };
       this.canvas = mk(); this.ctx = this.canvas.getContext('2d');
-      this.hc = mk(); this.h = this.hc.getContext('2d');
+      this.hc = mk(); this.h = this.hc.getContext('2d', { willReadFrequently: true });
+      this.rc = mk(); // roughness map: shiny quartz grains glint in the light
       this.tex = mk(); this.htex = mk();
       this.ops = [];
       this.cur = null;
@@ -40,40 +53,64 @@
     }
 
     buildTexture(c) {
-      const S = this.S, t = this.tex.getContext('2d');
+      // seeded so the grains (and their glints) land in the same places every time
+      const S = this.S, t = this.tex.getContext('2d'), r = rng(1234);
       const img = t.createImageData(S, S), d = img.data;
       for (let i = 0; i < d.length; i += 4) {
-        let n = (Math.random() - 0.5) * 14;
-        const r = Math.random();
-        if (r < 0.015) n -= 28; else if (r < 0.026) n += 22;
+        const n = (r() - 0.5) * 16;
         d[i] = c[0] + n; d[i + 1] = c[1] + n; d[i + 2] = c[2] + n * 0.9; d[i + 3] = 255;
       }
       t.putImageData(img, 0, 0);
+      // individual grains in a mix of mineral colours
+      const grains = [
+        [css(mix(c, [35, 25, 18], 0.6)), 0.06], [css(mix(c, [0, 0, 0], 0.22)), 0.16],
+        [css(mix(c, [190, 110, 50], 0.35)), 0.06], [css(mix(c, [120, 120, 120], 0.45)), 0.06],
+        [css(mix(c, [255, 255, 255], 0.3)), 0.2], [css(mix(c, [255, 252, 245], 0.75)), 0.08],
+      ];
+      const rc = this.rc.getContext('2d');
+      rc.fillStyle = 'rgb(245,245,245)'; rc.fillRect(0, 0, S, S);
+      rc.fillStyle = 'rgb(40,40,40)';
+      for (let i = 0; i < 90000; i++) {
+        const x = Math.floor(r() * S), y = Math.floor(r() * S), sz = r() < 0.75 ? 1 : 2;
+        let k = r(), g = 0;
+        while (g < grains.length - 1 && k > grains[g][1]) { k -= grains[g][1]; g++; }
+        if (k > grains[g][1]) continue; // most picks fall through: background stays
+        t.fillStyle = grains[g][0];
+        t.fillRect(x, y, sz, sz);
+        if (g === 5) rc.fillRect(x, y, sz, sz);
+      }
       for (let i = 0; i < 30; i++) {
-        const x = Math.random() * S, y = Math.random() * S, r = 80 + Math.random() * 200;
-        const g = t.createRadialGradient(x, y, 0, x, y, r);
-        g.addColorStop(0, Math.random() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(60,40,20,0.04)');
+        const x = r() * S, y = r() * S, rr = 80 + r() * 200;
+        const g = t.createRadialGradient(x, y, 0, x, y, rr);
+        g.addColorStop(0, r() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(60,40,20,0.04)');
         g.addColorStop(1, 'rgba(0,0,0,0)');
         t.fillStyle = g;
-        t.fillRect(x - r, y - r, r * 2, r * 2);
+        t.fillRect(x - rr, y - rr, rr * 2, rr * 2);
       }
       this.pattern = this.ctx.createPattern(this.tex, 'no-repeat');
+      this.roughDirty = true;
     }
 
     buildHeightBase() {
-      const S = this.S, t = this.htex.getContext('2d');
+      const S = this.S, t = this.htex.getContext('2d'), r = rng(99);
       const img = t.createImageData(S, S), d = img.data;
       for (let i = 0; i < d.length; i += 4) {
-        const v = BASE + (Math.random() - 0.5) * 7;
+        const v = BASE + (r() - 0.5) * 3;
         d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
       }
       t.putImageData(img, 0, 0);
+      // little clumps of grains so the surface feels loose and bumpy
+      for (let i = 0; i < 26000; i++) {
+        const v = r() < 0.5 ? BASE + 2 + r() * 3 : BASE - 2 - r() * 2;
+        t.fillStyle = `rgb(${v},${v},${v})`;
+        t.beginPath(); t.arc(r() * S, r() * S, 0.8 + r() * 1.8, 0, 7); t.fill();
+      }
       // a few soft lumps so untouched sand isn't perfectly flat
       for (let i = 0; i < 40; i++) {
         const x = Math.random() * S, y = Math.random() * S, r = 40 + Math.random() * 120;
         const g = t.createRadialGradient(x, y, 0, x, y, r);
         const up = Math.random() < 0.5;
-        g.addColorStop(0, up ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)');
+        g.addColorStop(0, up ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)');
         g.addColorStop(1, 'rgba(0,0,0,0)');
         t.fillStyle = g;
         t.fillRect(x - r, y - r, r * 2, r * 2);
@@ -94,7 +131,7 @@
       h.save();
       h.globalCompositeOperation = 'darken';
       h.lineCap = h.lineJoin = 'round';
-      for (const [lw, v] of [[1.45, 108], [1.05, 82], [0.6, 58]]) {
+      for (const [lw, v] of GROOVE) {
         h.lineWidth = w * lw; h.strokeStyle = `rgb(${v},${v},${v})`; build(h); h.stroke();
       }
       h.restore();
@@ -107,8 +144,8 @@
       c.fillStyle = this.cGroove; c.beginPath(); c.arc(x, y, r * 0.75, 0, 7); c.fill();
       const h = this.h;
       h.save(); h.globalCompositeOperation = 'darken';
-      h.fillStyle = 'rgb(100,100,100)'; h.beginPath(); h.arc(x, y, r * 1.2, 0, 7); h.fill();
-      h.fillStyle = 'rgb(70,70,70)'; h.beginPath(); h.arc(x, y, r * 0.7, 0, 7); h.fill();
+      h.fillStyle = 'rgb(122,122,122)'; h.beginPath(); h.arc(x, y, r * 1.2, 0, 7); h.fill();
+      h.fillStyle = 'rgb(116,116,116)'; h.beginPath(); h.arc(x, y, r * 0.7, 0, 7); h.fill();
       h.restore();
       this.dirty = true;
     }
@@ -151,7 +188,20 @@
           c.beginPath();
           for (let k = 0; k < n; k++) { c.moveTo(prev[k][0], prev[k][1]); c.lineTo(tines[k][0], tines[k][1]); }
         }, op.w);
-        st.prev = tines; st.edge = edge;
+        // sand pushed aside piles up in little ridges along both edges
+        const be = [[px * (half + 5), py * (half + 5)], [-px * (half + 5), -py * (half + 5)]];
+        const h = this.h;
+        h.save(); h.globalCompositeOperation = 'lighten'; h.lineCap = 'round';
+        h.strokeStyle = `rgb(${BERM},${BERM},${BERM})`; h.lineWidth = 9;
+        h.beginPath();
+        for (let k = 0; k < 2; k++) {
+          const ox0 = st.be ? st.be[k][0] : be[k][0], oy0 = st.be ? st.be[k][1] : be[k][1];
+          h.moveTo(x0 + ox0, y0 + oy0); h.lineTo(x1 + be[k][0], y1 + be[k][1]);
+        }
+        h.stroke();
+        h.lineWidth = 4; h.strokeStyle = `rgb(${BERM + 2},${BERM + 2},${BERM + 2})`; h.stroke();
+        h.restore();
+        st.prev = tines; st.edge = edge; st.be = be;
       }
     }
 
@@ -173,6 +223,27 @@
       this.dirty = true;
     }
 
+    // pouring builds a cone-shaped pile: each dab adds a little height
+    _pourFrom(op, from) {
+      const p = op.p, r = op.r, h = this.h, c = this.ctx;
+      for (let i = from; i < p.length / 2; i++) {
+        const x = p[2 * i], y = p[2 * i + 1];
+        h.save(); h.globalCompositeOperation = 'lighter';
+        const g = h.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, 'rgb(5,5,5)'); g.addColorStop(1, 'rgb(0,0,0)');
+        h.fillStyle = g; h.beginPath(); h.arc(x, y, r, 0, 7); h.fill();
+        h.restore();
+        c.save(); c.globalAlpha = 0.18; c.fillStyle = this.pattern;
+        c.beginPath(); c.arc(x, y, r * 0.75, 0, 7); c.fill(); c.restore();
+      }
+      this.dirty = true;
+    }
+    pour(x, y) {
+      const c = this.cur; if (!c || c.op.t !== 'pour') return;
+      c.op.p.push(R(x), R(y));
+      this._pourFrom(c.op, c.op.p.length / 2 - 1);
+    }
+
     _lineFrom(op, from) {
       const c = this.ctx, p = op.p;
       c.lineCap = c.lineJoin = 'round';
@@ -191,8 +262,18 @@
         case 'line': this._lineFrom(op, from); break;
         case 'dots': for (let i = from; i < op.p.length / 3; i++) this._dimple(op.p[3 * i], op.p[3 * i + 1], op.p[3 * i + 2]); break;
         case 'ring': for (let i = 0; i < op.n; i++) this._ring(op, i); break;
+        case 'pour': this._pourFrom(op, from); break;
         case 'clear': this._wipe(); break;
       }
+    }
+    heightAt(x, y) {
+      // height map value (0..255) at canvas coords, from a cached snapshot
+      if (!this._hd || this._hdStale) {
+        this._hd = this.h.getImageData(0, 0, this.S, this.S).data;
+        this._hdStale = false;
+      }
+      const px = Math.max(0, Math.min(this.S - 1, Math.round(x))), py = Math.max(0, Math.min(this.S - 1, Math.round(y)));
+      return this._hd[(py * this.S + px) * 4];
     }
     _wipe() {
       this.ctx.drawImage(this.tex, 0, 0);
@@ -214,9 +295,10 @@
       this.ops.push(op);
       this.cur = { op, st: {} };
       if (op.t === 'smooth') this._smoothFrom(op, 0);
+      if (op.t === 'pour') this._pourFrom(op, 0);
     }
     extend(x, y) {
-      const c = this.cur; if (!c) return false;
+      const c = this.cur; if (!c || c.op.t === 'pour') return false;
       const p = c.op.p, lx = p[p.length - 2], ly = p[p.length - 1];
       if (Math.hypot(x - lx, y - ly) < (c.op.t === 'smooth' ? 6 : 5)) return false;
       p.push(R(x), R(y));

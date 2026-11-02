@@ -25,11 +25,17 @@ Then open http://localhost:8000. (Double-clicking `index.html` won't work: brows
   - *Animals*: frog, turtle, sleepy cat, sparrow, snail, bunny, butterfly
 - **Look around**: right-drag (or two fingers) to turn the garden, and scroll or pinch to zoom. The *3D* / *Top* buttons switch between an angled view and looking straight down.
 - **Arrange**: drag to move. Select something to get a toolbar for rotate, resize, flip and remove. You can also drag it out of the tray to remove it.
-- **Rake the sand** with five tools:
+- **Rake the sand** with six tools:
   - *Rake* (5 tines) and *Wide rake* (9 tines) for flowing lines and waves
   - *Stick* for a single line
   - *Ripples*: tap the sand, or tap a stone or plant, to draw circles around it
   - *Smooth*: brush the sand flat again
+  - *Pour*: tip a scoop of sand to build piles, or pour it over the edge to make a mess
+- **Loose, grainy sand**: you can see individual grains (some of them glint), and the sand behaves like loose sand:
+  - grains spray off the rake as you drag (the faster you go, the more flies)
+  - rakes push little ridges up along the edges of each stroke
+  - sand puffs up when you drop something in or an animal lands
+  - grains that fly over the frame land on the wood and the table and stay there. *Smooth all* sweeps them up
 - **Animals have a life of their own**: frogs, bunnies and sparrows hop around and leave little prints. The turtle walks and leaves footprints, the snail leaves a shiny trail, the butterfly flutters off to land on your plants, and the cat just naps. Tap any animal to hear it. Turn this off with *Animals roam*.
 - **Sounds**: sand scraping that follows how fast you rake, a stone clack, a plant rustle, and animal voices, plus optional *Wind*, *Chimes* and *Stream* ambience and a mute button
 - **Customize**: six sand colours (classic, white, pearl, rose, sea glass, charcoal) and five frames (birch, walnut, ebony, bamboo, stone)
@@ -41,7 +47,7 @@ Then open http://localhost:8000. (Double-clicking `index.html` won't work: brows
 
 | Key | Action |
 | --- | --- |
-| `1`–`5` | Rake, Wide rake, Stick, Ripples, Smooth |
+| `1`–`6` | Rake, Wide rake, Stick, Ripples, Smooth, Pour |
 | `Ctrl/⌘ + Z` | Undo the last stroke |
 | `R` / `Shift + R` | Rotate the selected item |
 | `+` / `−` | Resize the selected item |

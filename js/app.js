@@ -22,6 +22,7 @@ const TOOLS = {
   stick:  { kind: 'rake', n: 1, sp: 0, w: 10 },
   ripple: { kind: 'ripple', n: 5, sp: 17, w: 7 },
   smooth: { kind: 'smooth', r: 48 },
+  pour:   { kind: 'pour', r: 75 },
 };
 const SAND_COLORS = [
   ['Classic', '#e8dcc4'], ['White', '#f2eee6'], ['Pearl', '#d4d0c7'],
@@ -113,10 +114,18 @@ colorTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
 const heightTex = new THREE.CanvasTexture(sand.hc);
 const sandGeo = new THREE.PlaneGeometry(SIZE, SIZE, 360, 360);
 sandGeo.rotateX(-Math.PI / 2);
+const DISP = 0.6; // height map 0..255 spans this many world units (128 = flat sand)
+const roughTex = new THREE.CanvasTexture(sand.rc);
 const sandMat = new THREE.MeshStandardMaterial({
-  map: colorTex, bumpMap: heightTex, bumpScale: 5,
-  displacementMap: heightTex, displacementScale: 0.12, displacementBias: -0.06, roughness: 0.96,
+  map: colorTex, bumpMap: heightTex, bumpScale: 18, roughnessMap: roughTex,
+  displacementMap: heightTex, displacementScale: DISP, displacementBias: -DISP * 128 / 255, roughness: 1,
 });
+const floorAt = (x, z) => {
+  // world height of the sand surface at a world x/z
+  const u = (x / SIZE + 0.5) * 1000, v = (z / SIZE + 0.5) * 1000;
+  if (u < 0 || u > 1000 || v < 0 || v > 1000) return 0;
+  return (sand.heightAt(u, v) - 128) / 255 * DISP;
+};
 const sandMesh = new THREE.Mesh(sandGeo, sandMat);
 sandMesh.receiveShadow = true;
 scene.add(sandMesh);
@@ -135,6 +144,7 @@ const toolMeshes = {
   stick: buildTool('stick'),
   ripple: buildTool('stick'),
   smooth: buildTool('smooth'),
+  pour: buildTool('pour'),
 };
 Object.values(toolMeshes).forEach(t => { t.visible = false; scene.add(t); });
 const tool = { pos: new THREE.Vector3(), target: new THREE.Vector3(), angle: 0, targetAngle: 0, y: 0.4, show: false, active: false, snap: true };
@@ -261,7 +271,7 @@ function addObject(id, x, y, opts = {}) {
   scene.add(root);
   state.objects.push(o);
   place(o);
-  if (!opts.silent) { Sound.place(item); hideHint(); }
+  if (!opts.silent) { Sound.place(item); hideHint(); o.puffPending = true; }
   if (opts.select) select(o);
   save();
   return o;
@@ -342,7 +352,8 @@ function dropMarker(g) { marker.visible = !!g; if (g) marker.position.set(g.p.x,
 
 /* =============== pointer: rake, ripple, drag objects =============== */
 const pointers = new Set();
-let stroke = null, drag = null, hoverObj = null;
+let stroke = null, drag = null, hoverObj = null, pouring = null;
+const nearTray = g => g && g.x > -0.2 && g.x < 1.2 && g.y > -0.2 && g.y < 1.2;
 
 function ripples(x, y, r0) {
   const t = TOOLS.ripple;
@@ -373,8 +384,16 @@ view.addEventListener('pointerdown', e => {
   }
   const g = groundAt(e);
   select(null);
-  if (!inSand(g)) return;
   const t = TOOLS[state.tool];
+  if (t.kind === 'pour' && nearTray(g)) {
+    view.setPointerCapture(e.pointerId);
+    pouring = { g, clock: 0 };
+    tool.active = true; tool.show = true; tool.target.copy(g.p);
+    if (e.pointerType !== 'mouse') tool.snap = true;
+    hideHint();
+    return;
+  }
+  if (!inSand(g)) return;
   if (t.kind === 'ripple') { ripples(g.x * 1000, g.y * 1000, 16); return; }
   view.setPointerCapture(e.pointerId);
   stroke = { last: performance.now(), lx: g.x * 1000, ly: g.y * 1000 };
@@ -388,6 +407,7 @@ view.addEventListener('pointerdown', e => {
 
 view.addEventListener('pointermove', e => {
   if (drag) return dragMove(e);
+  if (pouring) { const g = groundAt(e); if (g) { pouring.g = g; tool.target.copy(g.p); } return; }
   if (stroke) {
     const evs = (e.getCoalescedEvents && e.getCoalescedEvents()) || [];
     for (const ev of (evs.length ? evs : [e])) { const g = groundAt(ev); if (g) sand.extend(g.x * 1000, g.y * 1000); }
@@ -399,6 +419,8 @@ view.addEventListener('pointermove', e => {
     stroke.lx = x; stroke.ly = y; stroke.last = now;
     tool.target.copy(g.p);
     Sound.rake(d / dt, state.tool);
+    if (d > 1) sprayFromTool(g.p, (x - (stroke.px ?? x)) || Math.cos(tool.targetAngle), (y - (stroke.py ?? y)) || Math.sin(tool.targetAngle), d / dt * 10);
+    stroke.px = x; stroke.py = y;
     return;
   }
   if (pointers.size > 1 || e.pointerType !== 'mouse') return;
@@ -406,7 +428,7 @@ view.addEventListener('pointermove', e => {
   hoverObj = objectAt(e);
   const g = groundAt(e);
   if (hoverObj && state.tool !== 'ripple') { tool.show = false; view.style.cursor = 'grab'; }
-  else if (inSand(g)) {
+  else if (inSand(g) || (state.tool === 'pour' && nearTray(g))) {
     tool.show = true; view.style.cursor = 'none';
     tool.target.copy(g.p);
     if (!tool.active) tool.targetAngle = Math.atan2(camera.position.z - g.p.z, camera.position.x - g.p.x);
@@ -450,6 +472,14 @@ function endPointer(e) {
     } else if (o.item.animal) poke(o);
     return;
   }
+  if (pouring) {
+    pouring = null;
+    sand.end();
+    Sound.rakeStop();
+    tool.active = false;
+    if (e.pointerType !== 'mouse') tool.show = false;
+    save();
+  }
   if (stroke) {
     stroke = null;
     sand.end();
@@ -463,7 +493,7 @@ view.addEventListener('pointerup', endPointer);
 view.addEventListener('pointercancel', endPointer);
 view.addEventListener('pointerleave', e => { if (!stroke && !drag && e.pointerType === 'mouse') tool.show = false; });
 function cancelInteractions() {
-  if (stroke) { stroke = null; sand.end(); Sound.rakeStop(); save(); }
+  if (stroke || pouring) { stroke = null; pouring = null; sand.end(); Sound.rakeStop(); save(); }
   if (drag) { drag.o.dragging = false; drag = null; }
   tool.active = false; tool.show = false;
 }
@@ -528,13 +558,14 @@ function setFrame(key) {
 }
 
 $('#undo').addEventListener('click', () => { if (sand.undo()) { Sound.undo(); save(); } });
-$('#clear').addEventListener('click', () => { Sound.clear(); sand.clear(); save(); });
+$('#clear').addEventListener('click', () => { Sound.clear(); sand.clear(); sweepSpills(); save(); });
 $('#reset').addEventListener('click', () => {
   if (!confirm('Start a new, empty garden? Your current one will be cleared.')) return;
   Sound.clear();
   select(null);
   state.objects.forEach(o => scene.remove(o.root));
   state.objects = [];
+  sweepSpills();
   sand.reset();
   save();
 });
@@ -567,7 +598,7 @@ window.addEventListener('keydown', e => {
   if (e.target.closest('input, textarea')) return;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); $('#undo').click(); return; }
   const o = state.selected;
-  const keyTools = { 1: 'rake', 2: 'wide', 3: 'stick', 4: 'ripple', 5: 'smooth' };
+  const keyTools = { 1: 'rake', 2: 'wide', 3: 'stick', 4: 'ripple', 5: 'smooth', 6: 'pour' };
   if (!o && keyTools[e.key]) { setTool(keyTools[e.key]); return; }
   if (!o && (e.key === 't' || e.key === 'T')) { setView(state.view === '3d' ? 'top' : '3d'); return; }
   if (!o) return;
@@ -638,6 +669,7 @@ function hop(o, a, dt) {
       a.hopping = null; o.hopY = 0;
       const s = worldSize(o) * 100, hx = Math.cos(o.rot * Math.PI / 180), hy = Math.sin(o.rot * Math.PI / 180);
       for (const side of [-1, 1]) sand.addDot(o.x * 1000 - hy * s * 0.2 * side, o.y * 1000 + hx * s * 0.2 * side, Math.max(2.5, s * 0.05));
+      puff(o.root.position.x, o.root.position.z, worldSize(o) * 0.3, 8, 0.8);
       Sound.land(o.item.voice);
       a.timer = rand(o.item.rest[0], o.item.rest[1]);
     }
@@ -679,14 +711,156 @@ function fly(o, a, dt, now) {
   place(o);
 }
 
+/* =============== loose sand: flying grains and spills =============== */
+const MAXP = 5000, MAXS = 9000;
+const grainSprite = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 32;
+  const x = c.getContext('2d'), g = x.createRadialGradient(16, 16, 0, 16, 16, 16);
+  g.addColorStop(0, '#fff'); g.addColorStop(0.6, '#eee'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  x.fillStyle = g; x.beginPath(); x.arc(16, 16, 15, 0, 7); x.fill();
+  return new THREE.CanvasTexture(c);
+})();
+function makeCloud(max, size) {
+  const pos = new Float32Array(max * 3), col = new Float32Array(max * 3);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3).setUsage(THREE.DynamicDrawUsage));
+  geo.setDrawRange(0, 0);
+  const pts = new THREE.Points(geo, new THREE.PointsMaterial({ size, map: grainSprite, vertexColors: true, alphaTest: 0.45, sizeAttenuation: true }));
+  pts.frustumCulled = false;
+  scene.add(pts);
+  return { pos, col, geo, n: 0 };
+}
+const air = makeCloud(MAXP, 0.13), vel = new Float32Array(MAXP * 3);
+const spill = makeCloud(MAXS, 0.11);
+let spillNext = 0, lastGrainSound = 0;
+const grainCol = new THREE.Color(), sandCol = new THREE.Color();
+function grainColor(arr, i) {
+  sandCol.set(state.sandColor);
+  const r = Math.random();
+  const k = r < 0.08 ? 0.45 : r < 0.18 ? 1.25 : 0.78 + Math.random() * 0.25;
+  grainCol.copy(sandCol).multiplyScalar(k * 0.8); // points are unlit, so tone them down to match the lit sand
+  arr[i * 3] = grainCol.r; arr[i * 3 + 1] = grainCol.g; arr[i * 3 + 2] = grainCol.b;
+}
+function emit(x, y, z, vx, vy, vz) {
+  if (air.n >= MAXP) return;
+  const i = air.n++;
+  air.pos[i * 3] = x; air.pos[i * 3 + 1] = y; air.pos[i * 3 + 2] = z;
+  vel[i * 3] = vx; vel[i * 3 + 1] = vy; vel[i * 3 + 2] = vz;
+  grainColor(air.col, i);
+}
+function settle(i, y) {
+  const j = spillNext; spillNext = (spillNext + 1) % MAXS;
+  spill.pos[j * 3] = air.pos[i * 3]; spill.pos[j * 3 + 1] = y; spill.pos[j * 3 + 2] = air.pos[i * 3 + 2];
+  spill.col[j * 3] = air.col[i * 3]; spill.col[j * 3 + 1] = air.col[i * 3 + 1]; spill.col[j * 3 + 2] = air.col[i * 3 + 2];
+  spill.n = Math.min(MAXS, spill.n + 1);
+  spill.dirty = true;
+  const now = performance.now();
+  if (now - lastGrainSound > 45) { lastGrainSound = now; Sound.grain(); }
+}
+function kill(i) {
+  const l = --air.n;
+  if (i !== l) for (let k = 0; k < 3; k++) { air.pos[i * 3 + k] = air.pos[l * 3 + k]; air.col[i * 3 + k] = air.col[l * 3 + k]; vel[i * 3 + k] = vel[l * 3 + k]; }
+}
+function sweepSpills() { spill.n = 0; spillNext = 0; spill.dirty = true; air.n = 0; }
+
+const HALF = SIZE / 2, OUTER = SIZE / 2 + RIM, GROUND = -DEPTH;
+function stepParticles(dt) {
+  if (!air.n && !spill.dirty) return;
+  const P = air.pos;
+  for (let i = 0; i < air.n; i++) {
+    const ix = i * 3, iy = ix + 1, iz = ix + 2;
+    const ox = P[ix], oy = P[iy], oz = P[iz];
+    vel[iy] -= 9.8 * dt;
+    P[ix] += vel[ix] * dt; P[iy] += vel[iy] * dt; P[iz] += vel[iz] * dt;
+    const x = P[ix], y = P[iy], z = P[iz];
+    const wasIn = Math.abs(ox) < HALF && Math.abs(oz) < HALF;
+    const inside = Math.abs(x) < HALF && Math.abs(z) < HALF;
+    const onFrame = !inside && Math.abs(x) < OUTER && Math.abs(z) < OUTER;
+    if (inside) {
+      const f = floorAt(x, z);
+      if (y <= f) {
+        // most grains sink back into the sand; a few bounce
+        if (vel[iy] < -2.2 && Math.random() < 0.25) { P[iy] = f; vel[iy] *= -0.25; vel[ix] *= 0.5; vel[iz] *= 0.5; }
+        else { kill(i); i--; }
+      }
+    } else if (onFrame) {
+      if (y <= RIM_H) {
+        if (wasIn && oy < RIM_H) {
+          // hit the inside wall of the tray: bounce back in
+          if (Math.abs(x) >= HALF) { P[ix] = Math.sign(x) * (HALF - 0.01); vel[ix] *= -0.3; }
+          if (Math.abs(z) >= HALF) { P[iz] = Math.sign(z) * (HALF - 0.01); vel[iz] *= -0.3; }
+        } else if (oy >= RIM_H - 0.03) {
+          if (Math.abs(vel[iy]) > 1.2) { P[iy] = RIM_H; vel[iy] *= -0.3; vel[ix] *= 0.55; vel[iz] *= 0.55; }
+          else { settle(i, RIM_H + 0.012); kill(i); i--; }
+        }
+      }
+    } else if (y <= GROUND) {
+      if (Math.abs(vel[iy]) > 1.2) { P[iy] = GROUND; vel[iy] *= -0.3; vel[ix] *= 0.55; vel[iz] *= 0.55; }
+      else { settle(i, GROUND + 0.012); kill(i); i--; }
+    }
+    if (P[iy] < -5) { kill(i); i--; }
+  }
+  air.geo.setDrawRange(0, air.n);
+  air.geo.attributes.position.needsUpdate = true;
+  air.geo.attributes.color.needsUpdate = true;
+  if (spill.dirty) {
+    spill.geo.setDrawRange(0, spill.n);
+    spill.geo.attributes.position.needsUpdate = true;
+    spill.geo.attributes.color.needsUpdate = true;
+    spill.dirty = false;
+  }
+}
+// grains kicked up by a moving rake/stick/smoother
+function sprayFromTool(p, dx, dy, speed) {
+  const t = TOOLS[state.tool];
+  const L = Math.hypot(dx, dy) || 1, ux = dx / L, uz = dy / L, px = -uz, pz = ux;
+  const span = t.kind === 'smooth' ? 0.95 : (t.n - 1) * t.sp / 100 + 0.12;
+  const s = Math.min(speed, 9);
+  const count = Math.min(16, Math.round(1 + s * 1.6 * (t.kind === 'smooth' ? 1.5 : t.n > 1 ? 1 : 0.5)));
+  const f0 = floorAt(p.x, p.z);
+  for (let k = 0; k < count; k++) {
+    const o = (Math.random() - 0.5) * span;
+    const fwd = s * (0.25 + Math.random() * 0.45);
+    emit(p.x + px * o + ux * 0.05, f0 + 0.02, p.z + pz * o + uz * 0.05,
+      ux * fwd + (Math.random() - 0.5) * 0.7, 0.5 + Math.random() * (0.6 + s * 0.3), uz * fwd + (Math.random() - 0.5) * 0.7);
+  }
+}
+// a ring of grains thrown up when something lands
+function puff(x, z, r, n, power) {
+  const f = floorAt(x, z);
+  for (let k = 0; k < n; k++) {
+    const a = Math.random() * Math.PI * 2, sp = power * (0.4 + Math.random() * 0.8);
+    emit(x + Math.cos(a) * r, f + 0.02, z + Math.sin(a) * r, Math.cos(a) * sp, 0.6 + Math.random() * power, Math.sin(a) * sp);
+  }
+}
+// pouring: a stream of grains falls from the scoop and builds a pile
+function stepPour(dt) {
+  const g = pouring.g, p = tool.pos;
+  const lipY = tool.y + 1.22;
+  for (let k = 0; k < 14; k++) emit(p.x + (Math.random() - 0.5) * 0.07, lipY, p.z + (Math.random() - 0.5) * 0.07, (Math.random() - 0.5) * 0.25, -0.4 - Math.random() * 0.8, (Math.random() - 0.5) * 0.25);
+  Sound.rake(1.1, 'pour');
+  // one dab of sand every 70ms of real time, however fast frames come
+  const now = performance.now();
+  if (!pouring.last) pouring.last = now - 70;
+  let dabs = Math.min(8, Math.floor((now - pouring.last) / 70));
+  if (!dabs) return;
+  pouring.last += dabs * 70;
+  const u = (p.x / SIZE + 0.5) * 1000, v = (p.z / SIZE + 0.5) * 1000;
+  if (!inSand(g) || u < 0 || u > 1000 || v < 0 || v > 1000) return;
+  while (dabs--) { if (!sand.cur) sand.begin({ t: 'pour', r: TOOLS.pour.r }, u, v); else sand.pour(u, v); }
+}
+
 /* =============== main loop =============== */
 const clock = new THREE.Clock();
-let saveClock = 0;
+let saveClock = 0, hStamp = 0, hPending = false;
 const tmpV = new THREE.Vector3();
 function frame() {
   const dt = Math.min(0.05, clock.getDelta()), t = clock.elapsedTime, now = performance.now();
   stepView(dt);
   controls.update();
+  if (pouring) stepPour(dt);
+  stepParticles(dt);
 
   if (state.roam && !document.hidden) {
     for (const o of state.objects) if (o.item.move && !o.dragging) behave(o, dt, now);
@@ -708,6 +882,7 @@ function frame() {
     if (o.dropT > 0) {
       o.dropT = Math.max(0, o.dropT - dt / 0.45);
       const p = 1 - o.dropT;
+      if (o.puffPending && p > 0.6) { o.puffPending = false; puff(o.root.position.x, o.root.position.z, worldSize(o) * 0.4, 36, 1.4); }
       y += Math.max(0, 1 - p * 1.6) * 0.9;
       const sq = p > 0.6 ? Math.sin((p - 0.6) / 0.4 * Math.PI) * 0.12 : 0;
       sx += sq; sy -= sq;
@@ -750,13 +925,18 @@ function frame() {
     if (tool.snap) { tool.pos.copy(tool.target); tool.angle = tool.targetAngle; tool.snap = false; }
     tool.pos.lerp(tool.target, tool.active ? 0.6 : 0.35);
     tool.angle = lerpAngle(tool.angle, tool.targetAngle, tool.active ? 0.25 : 0.15);
-    const wantY = tool.active ? -0.025 : 0.35;
+    const ground = floorAt(tool.pos.x, tool.pos.z);
+    const wantY = state.tool === 'pour' ? ground + (tool.active ? 0.15 : 0.3) : ground + (tool.active ? -0.025 : 0.35);
     tool.y += (wantY - tool.y) * 0.3;
     tm.position.set(tool.pos.x, tool.y, tool.pos.z);
     tm.rotation.set(0, -tool.angle, 0);
   } else tool.snap = true;
 
-  if (sand.dirty) { colorTex.needsUpdate = true; heightTex.needsUpdate = true; sand.dirty = false; }
+  if (sand.dirty) {
+    colorTex.needsUpdate = true; heightTex.needsUpdate = true; sand.dirty = false;
+    if (now - hStamp > 120) { sand._hdStale = true; hStamp = now; } else hPending = true;
+  } else if (hPending && now - hStamp > 120) { sand._hdStale = true; hStamp = now; hPending = false; }
+  if (sand.roughDirty) { roughTex.needsUpdate = true; sand.roughDirty = false; }
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }

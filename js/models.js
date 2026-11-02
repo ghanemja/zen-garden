@@ -532,6 +532,18 @@ export function buildTool(kind, n = 5, sp = 0.15) {
     g.add(mesh(GEO.cone, dark, [0.02, 0.05, 0], [0.02, 0.1, 0.02], [0, 0, -0.45]));
     handle(1.5, 1.1, 0.06, bam, 0.028);
     for (let i = 1; i < 5; i++) { const d = i * 0.3; g.add(mesh(GEO.cyl, dark, [Math.cos(1.1) * d, 0.06 + Math.sin(1.1) * d, 0], [0.024, 0.012, 0.024], [0, 0, -(Math.PI / 2 - 1.1)])); }
+  } else if (kind === 'pour') {
+    // a little wooden scoop full of sand, tipped so it pours straight down
+    const scoop = new THREE.Group();
+    const cup = mesh(new THREE.CylinderGeometry(0.2, 0.16, 0.32, 24, 1, true), std('#b98a52', { roughness: 0.6, side: THREE.DoubleSide }));
+    scoop.add(cup);
+    scoop.add(mesh(new THREE.CircleGeometry(0.16, 24), std('#9c7646', { roughness: 0.6, side: THREE.DoubleSide }), [0, -0.16, 0], 1, [Math.PI / 2, 0, 0]));
+    scoop.add(mesh(new THREE.TorusGeometry(0.2, 0.018, 8, 28), wood, [0, 0.16, 0], 1, [Math.PI / 2, 0, 0]));
+    scoop.add(mesh(new THREE.CircleGeometry(0.17, 24), std('#e2d3b4', { roughness: 1 }), [0, 0.1, 0], 1, [-Math.PI / 2, 0, 0]));
+    scoop.add(mesh(GEO.cyl, wood, [0, -0.05, -0.42], [0.03, 0.5, 0.03], [Math.PI / 2, 0, 0]));
+    scoop.rotation.z = -2.1;
+    scoop.position.set(-0.12, 1.32, 0);
+    g.add(scoop);
   } else if (kind === 'smooth') {
     g.add(mesh(GEO.box, wood, [0, 0.07, 0], [0.05, 0.14, 0.95]));
     g.add(mesh(GEO.box, dark, [0.04, 0.14, 0], [0.08, 0.03, 0.3]));
