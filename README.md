@@ -12,7 +12,7 @@ It's plain HTML/JS: no build step and no audio files (every sound is synthesized
 python3 -m http.server 8000
 ```
 
-Then open http://localhost:8000. You can also just double-click `index.html`.
+Then open http://localhost:8000. (Double-clicking `index.html` won't work: browsers only load the 3D code from a web server.)
 
 **GitHub Pages:** Settings → Pages → Deploy from a branch → `main` / `(root)`.
 
@@ -44,7 +44,7 @@ Then open http://localhost:8000. You can also just double-click `index.html`.
 | `1`–`5` | Rake, Wide rake, Stick, Ripples, Smooth |
 | `Ctrl/⌘ + Z` | Undo the last stroke |
 | `R` / `Shift + R` | Rotate the selected item |
-| `+` / `−` | Resize the selected item (the mouse wheel works too) |
+| `+` / `−` | Resize the selected item |
 | `F` | Flip the selected item |
 | Arrow keys | Nudge the selected item |
 | `Delete` | Remove the selected item |
